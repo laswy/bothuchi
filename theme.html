@@ -18,7 +18,6 @@ margin:0;
 font-family:monospace;
 background:#07071a;
 color:white;
-/* removed overflow:hidden — allow fallback scrolling if JS fails */
 }
 
 /* header */
@@ -29,7 +28,7 @@ padding:40px 20px;
 position:absolute;
 width:100%;
 z-index:5;
-pointer-events:none; /* let clicks pass through to bubbles behind */
+pointer-events:none;
 }
 
 #header a{pointer-events:auto}
@@ -44,6 +43,7 @@ text-shadow:0 0 40px rgba(180,130,255,.6);
 #blog-desc{
 opacity:.5;
 margin-top:6px;
+margin-bottom:0;
 }
 
 /* arena */
@@ -79,33 +79,57 @@ display:none;
 position:absolute;
 border-radius:50%;
 display:flex;
+flex-direction:column;
 align-items:center;
 justify-content:center;
 text-align:center;
-padding:18px;
+padding:16px;
 cursor:pointer;
 color:white;
+border:none;
 transition:transform .25s,box-shadow .25s;
-/* animation-delay set per-bubble via JS for staggered effect */
 animation:floaty 4s ease-in-out infinite;
-/* keyboard focus */
 outline:none;
+overflow:hidden;
+gap:6px;
 }
 
 .bubble:hover,
 .bubble:focus-visible{
 transform:scale(1.12);
 z-index:10;
-box-shadow: 0 0 0 3px rgba(255,255,255,.5), 0 0 28px var(--shadow), 0 0 60px var(--shadow);
+box-shadow:0 0 0 3px rgba(255,255,255,.5),0 0 28px var(--shadow),0 0 60px var(--shadow);
+}
+
+/* thumbnail image inside bubble */
+
+.bubble-thumb{
+width:52px;
+height:52px;
+border-radius:50%;
+object-fit:cover;
+border:2px solid rgba(255,255,255,.45);
+box-shadow:0 2px 10px rgba(0,0,0,.4);
+flex-shrink:0;
+/* no title: larger thumb */
+}
+
+.bubble.photo-only .bubble-thumb{
+width:68px;
+height:68px;
 }
 
 .bubble-title{
-font-size:13px;
+font-size:12px;
 font-weight:600;
 line-height:1.3;
-text-shadow:0 1px 4px rgba(0,0,0,.4);
-/* prevent text selection on click */
+text-shadow:0 1px 4px rgba(0,0,0,.5);
 user-select:none;
+max-width:90%;
+display:-webkit-box;
+-webkit-line-clamp:3;
+-webkit-box-orient:vertical;
+overflow:hidden;
 }
 
 @keyframes floaty{
@@ -118,9 +142,9 @@ user-select:none;
 .bubble::after{
 content:'✦';
 position:absolute;
-top:15%;
-right:18%;
-font-size:10px;
+top:12%;
+right:16%;
+font-size:9px;
 opacity:.7;
 animation:twinkle 2s ease-in-out infinite;
 pointer-events:none;
@@ -129,9 +153,9 @@ pointer-events:none;
 .bubble::before{
 content:'✦';
 position:absolute;
-bottom:18%;
-left:16%;
-font-size:7px;
+bottom:14%;
+left:14%;
+font-size:6px;
 opacity:.5;
 animation:twinkle 2.4s ease-in-out infinite reverse;
 pointer-events:none;
@@ -173,13 +197,11 @@ box-shadow:0 0 60px rgba(160,100,255,.2);
 position:relative;
 }
 
-/* scrollbar inside modal */
 .post-card::-webkit-scrollbar{width:4px}
 .post-card::-webkit-scrollbar-track{background:transparent}
 .post-card::-webkit-scrollbar-thumb{background:rgba(180,130,255,.4);border-radius:4px}
 
 .close-btn{
-/* use <button> in markup — these are purely visual overrides */
 background:none;
 border:none;
 color:white;
@@ -204,7 +226,7 @@ outline-offset:2px;
 
 .modal-title{
 font-size:28px;
-margin-bottom:12px;
+margin:0 0 12px;
 background:linear-gradient(90deg,#ff9de2,#c77dff,#7ec8e3);
 -webkit-background-clip:text;
 -webkit-text-fill-color:transparent;
@@ -215,6 +237,7 @@ background-clip:text;
 font-size:12px;
 opacity:.4;
 margin-bottom:16px;
+display:block;
 }
 
 .modal-body{
@@ -228,7 +251,6 @@ border-radius:10px;
 display:block;
 }
 
-/* responsive: smaller bubbles & header on mobile */
 @media(max-width:480px){
 #blog-title{font-size:28px}
 #header{padding:24px 16px}
@@ -242,8 +264,8 @@ display:block;
 <canvas id="canvas-bg" aria-hidden="true"></canvas>
 
 <header id="header">
-<a href="/" id="blog-title">{Title}</a>
-<p id="blog-desc">{Description}</p>
+  <a href="/" id="blog-title">{Title}</a>
+  <p id="blog-desc">{Description}</p>
 </header>
 
 <main id="arena" aria-label="Posts">
@@ -252,20 +274,21 @@ display:block;
 
 {block:Text}
 <div class="post-data"
-data-title="{block:Title}{Title}{/block:Title}"
-data-date="{ShortMonth} {DayOfMonth}, {Year}">
-<div class="post-body">{Body}</div>
+  data-title="{block:Title}{Title}{/block:Title}"
+  data-date="{ShortMonth} {DayOfMonth}, {Year}">
+  <div class="post-body">{Body}</div>
 </div>
 {/block:Text}
 
 {block:Photo}
 <div class="post-data"
-data-title=""
-data-date="{ShortMonth} {DayOfMonth}, {Year}">
-<div class="post-body">
-<img src="{PhotoURL-500}" alt="{block:Caption}{Caption}{/block:Caption}">
-{block:Caption}<p>{Caption}</p>{/block:Caption}
-</div>
+  data-title="{block:Caption}{Caption}{/block:Caption}"
+  data-date="{ShortMonth} {DayOfMonth}, {Year}"
+  data-image="{PhotoURL-100}">
+  <div class="post-body">
+    <img src="{PhotoURL-500}" alt="{block:Caption}{Caption}{/block:Caption}">
+    {block:Caption}<p>{Caption}</p>{/block:Caption}
+  </div>
 </div>
 {/block:Photo}
 
@@ -306,27 +329,34 @@ const PALETTES=[
 
 const rand=(a,b)=>Math.random()*(b-a)+a
 
-/* sanitize text before inserting as HTML to prevent XSS */
 function escapeHTML(str){
 return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
 }
 
 function getPosts(){
-return [...document.querySelectorAll('.post-data')].map(el=>({
+return [...document.querySelectorAll('.post-data')].map(el=>{
+const body=el.querySelector('.post-body')
+/* photo posts set data-image in template; text posts: extract first <img> from body */
+let image=el.dataset.image||''
+if(!image){
+const img=body.querySelector('img')
+if(img)image=img.src
+}
+return{
 title:el.dataset.title||'',
 date:el.dataset.date,
-body:el.querySelector('.post-body').innerHTML
-}))
+body:body.innerHTML,
+image
+}
+})
 }
 
-/* simple collision helper: returns true if two rects overlap with padding */
-function overlaps(a,b,pad=12){
-return !(a.x+a.w+pad<b.x||b.x+b.w+pad<a.x||a.y+a.h+pad<b.y||b.y+b.h+pad<a.y)
+function overlaps(a,b,pad=14){
+return!(a.x+a.w+pad<b.x||b.x+b.w+pad<a.x||a.y+a.h+pad<b.y||b.y+b.h+pad<a.y)
 }
 
 function buildBubbles(){
 const arena=document.getElementById('arena')
-/* remove any existing bubbles on rebuild */
 arena.querySelectorAll('.bubble').forEach(b=>b.remove())
 
 const posts=getPosts()
@@ -335,24 +365,25 @@ const H=window.innerHeight
 const placed=[]
 
 posts.forEach((post,i)=>{
-const size=rand(110,180)
+const hasImage=!!post.image
+const hasTitle=!!post.title
+/* slightly bigger bubble when showing both image and title */
+const minSize=hasImage&&hasTitle?140:hasImage?120:110
+const size=rand(minSize,minSize+70)
+
 const pal=PALETTES[i%PALETTES.length]
 
-const bubble=document.createElement('button') /* semantic button for keyboard access */
+const bubble=document.createElement('button')
 bubble.className='bubble'
+if(hasImage&&!hasTitle)bubble.classList.add('photo-only')
 bubble.setAttribute('aria-label',post.title||`Bài viết ${i+1}`)
-
-/* CSS custom property for focus ring color */
 bubble.style.setProperty('--shadow',pal.shadow)
 bubble.style.width=size+'px'
 bubble.style.height=size+'px'
 bubble.style.background=pal.bg
 bubble.style.boxShadow=`0 0 28px ${pal.shadow},0 0 60px ${pal.shadow}`
-
-/* staggered float animation so bubbles don't all bob in sync */
 bubble.style.animationDelay=`${(i*0.37)%4}s`
 
-/* collision-aware placement — try up to 30 times */
 let x,y,tries=0
 do{
 x=rand(10,Math.max(10,W-size-10))
@@ -364,17 +395,20 @@ placed.push({x,y,w:size,h:size})
 bubble.style.left=x+'px'
 bubble.style.top=y+'px'
 
-if(post.title){
-bubble.innerHTML=`<div class="bubble-title">${escapeHTML(post.title)}</div>`
+let content=''
+if(hasImage){
+content+=`<img class="bubble-thumb" src="${escapeHTML(post.image)}" alt="" loading="lazy">`
 }
+if(hasTitle){
+content+=`<div class="bubble-title">${escapeHTML(post.title)}</div>`
+}
+if(content)bubble.innerHTML=content
 
 bubble.addEventListener('click',()=>openModal(post))
-
 arena.appendChild(bubble)
 })
 }
 
-/* track the element focused before modal opened so we can restore it */
 let prevFocus=null
 
 function openModal(post){
@@ -393,16 +427,9 @@ titleEl.style.display='none'
 }
 
 metaEl.textContent=post.date
-/* post.body comes from Tumblr template — trusted source for the theme owner */
 bodyEl.innerHTML=post.body
-
 overlay.classList.add('open')
-
-/* move focus into modal */
-const closeBtn=document.getElementById('close-btn')
-closeBtn.focus()
-
-/* trap focus inside modal */
+document.getElementById('close-btn').focus()
 overlay.addEventListener('keydown',trapFocus)
 }
 
@@ -410,22 +437,16 @@ function closeModal(){
 const overlay=document.getElementById('overlay')
 overlay.classList.remove('open')
 overlay.removeEventListener('keydown',trapFocus)
-/* restore focus to the bubble that opened the modal */
 if(prevFocus)prevFocus.focus()
 }
 
 function trapFocus(e){
 if(e.key!=='Tab')return
-const card=document.querySelector('.post-card')
-const focusable=[...card.querySelectorAll('button,a,[tabindex]:not([tabindex="-1"])')].filter(el=>!el.disabled)
+const focusable=[...document.querySelector('.post-card').querySelectorAll('button,a,[tabindex]:not([tabindex="-1"])')].filter(el=>!el.disabled)
 if(!focusable.length)return
-const first=focusable[0]
-const last=focusable[focusable.length-1]
-if(e.shiftKey){
-if(document.activeElement===first){e.preventDefault();last.focus()}
-}else{
-if(document.activeElement===last){e.preventDefault();first.focus()}
-}
+const first=focusable[0],last=focusable[focusable.length-1]
+if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus()}}
+else{if(document.activeElement===last){e.preventDefault();first.focus()}}
 }
 
 document.getElementById('close-btn').addEventListener('click',closeModal)
@@ -434,26 +455,20 @@ document.getElementById('overlay').addEventListener('click',e=>{
 if(e.target.id==='overlay')closeModal()
 })
 
-/* close on Escape key */
 document.addEventListener('keydown',e=>{
 if(e.key==='Escape'&&document.getElementById('overlay').classList.contains('open'))closeModal()
 })
 
-/* ── canvas starfield ── */
+/* ── starfield ── */
 
 const cvs=document.getElementById('canvas-bg')
 const ctx=cvs.getContext('2d')
-let stars=[]
-let rafId=null
+let stars=[],rafId=null
 
 function resize(){
 cvs.width=window.innerWidth
 cvs.height=window.innerHeight
-/* rescale existing star positions instead of rebuilding */
-stars.forEach(s=>{
-s.x=Math.random()*cvs.width
-s.y=Math.random()*cvs.height
-})
+stars.forEach(s=>{s.x=Math.random()*cvs.width;s.y=Math.random()*cvs.height})
 }
 
 function initStars(n=120){
@@ -471,7 +486,7 @@ color:`hsl(${200+Math.random()*160},80%,80%)`
 
 function drawStars(){
 ctx.clearRect(0,0,cvs.width,cvs.height)
-const t=Date.now()*0.001
+const t=Date.now()*.001
 stars.forEach(s=>{
 const a=.3+(Math.sin(t*3+s.phase)*.5+.5)*.6
 ctx.globalAlpha=a
@@ -484,23 +499,15 @@ ctx.globalAlpha=1
 rafId=requestAnimationFrame(drawStars)
 }
 
-/* pause animation when the tab is hidden to save CPU */
 document.addEventListener('visibilitychange',()=>{
-if(document.hidden){
-cancelAnimationFrame(rafId)
-}else{
-rafId=requestAnimationFrame(drawStars)
-}
+if(document.hidden)cancelAnimationFrame(rafId)
+else rafId=requestAnimationFrame(drawStars)
 })
 
-/* debounce resize handler */
 let resizeTimer
 window.addEventListener('resize',()=>{
 clearTimeout(resizeTimer)
-resizeTimer=setTimeout(()=>{
-resize()
-buildBubbles()
-},150)
+resizeTimer=setTimeout(()=>{resize();buildBubbles()},150)
 })
 
 window.addEventListener('DOMContentLoaded',()=>{
