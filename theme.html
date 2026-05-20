@@ -94,6 +94,25 @@ overflow:hidden;
 gap:6px;
 }
 
+.bubble-entering{
+animation:bubbleIn .6s cubic-bezier(.34,1.56,.64,1) forwards !important;
+}
+
+.bubble-exiting{
+animation:bubbleOut .45s ease forwards !important;
+pointer-events:none;
+}
+
+@keyframes bubbleIn{
+from{opacity:0;transform:scale(.55)}
+to  {opacity:1;transform:scale(1)}
+}
+
+@keyframes bubbleOut{
+from{opacity:1;transform:scale(1)}
+to  {opacity:0;transform:scale(.6)}
+}
+
 .bubble:hover,
 .bubble:focus-visible{
 transform:scale(1.12);
@@ -366,6 +385,14 @@ function escapeHTML(str){
 return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
 }
 
+function shuffle(arr){
+for(let i=arr.length-1;i>0;i--){
+const j=Math.floor(Math.random()*(i+1));
+[arr[i],arr[j]]=[arr[j],arr[i]]
+}
+return arr
+}
+
 function getPosts(){
 return [...document.querySelectorAll('.post-data')].map(el=>{
 const body=el.querySelector('.post-body')
@@ -392,7 +419,7 @@ function buildBubbles(){
 const arena=document.getElementById('arena')
 arena.querySelectorAll('.bubble').forEach(b=>b.remove())
 
-const posts=getPosts()
+const posts=shuffle(getPosts())
 const W=window.innerWidth
 const H=window.innerHeight
 const placed=[]
@@ -465,6 +492,30 @@ el.style.animationDuration=dur+'s'
 el.style.animationDelay=`-${rand(0,dur)}s`
 arena.appendChild(el)
 }
+}
+
+function reshuffleBubbles(){
+const arena=document.getElementById('arena')
+const current=[...arena.querySelectorAll('.bubble')]
+
+/* stagger fade-out */
+current.forEach((b,i)=>setTimeout(()=>b.classList.add('bubble-exiting'),i*55))
+
+/* rebuild after exit finishes, then stagger fade-in */
+const exitDuration=current.length*55+500
+setTimeout(()=>{
+buildBubbles()
+const next=[...arena.querySelectorAll('.bubble')]
+next.forEach((b,i)=>{
+b.style.opacity='0'
+setTimeout(()=>{
+b.style.opacity=''
+b.classList.add('bubble-entering')
+/* clean up class after animation so floaty takes over */
+b.addEventListener('animationend',()=>b.classList.remove('bubble-entering'),{once:true})
+},i*70)
+})
+},exitDuration)
 }
 
 let prevFocus=null
@@ -574,6 +625,7 @@ initStars()
 drawStars()
 buildBubbles()
 buildFallingBubbles()
+setInterval(reshuffleBubbles,30000)
 })
 
 </script>
