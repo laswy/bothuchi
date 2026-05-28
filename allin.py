@@ -1,4 +1,13 @@
 from __future__ import annotations
+def cg_guess_id_from_symbol(symbol: str) -> Optional[str]:
+    s = symbol.upper()
+    static = {
+        "BTC": "bitcoin", "ETH": "ethereum", "ATOM": "cosmos", "DYDX": "dydx-chain",
+        "BABY": "babylon", "DYM": "dymension", "AURA": "aura-network", "ZETA": "zetachain",
+        "SOL": "solana", "BNB": "binancecoin", "TON": "the-open-network",
+        "USDT": "tether", "USDC": "usd-coin"
+    }
+    return static.get(s)
 # --- NHẬP NHANH CÂU TỰ NHIÊN ---
 VIET_NUM = {
     "k": 1000, "nghin": 1000, "nghìn": 1000, "ngan": 1000, "ngàn": 1000,
@@ -197,11 +206,6 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8035366092:AAGe1lnDSnSSKueP9fS
 DB_PATH = os.environ.get("UNIVER_DB_PATH", "univer_all_in_one.db")
 CRYPTO_DB_PATH = DB_PATH  # merge: use one SQLite file for all modules
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-
-# Webhook (dùng cho Cloudflare Tunnel / production). Nếu để trống → dùng polling.
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")   # VD: https://abc.trycloudflare.com
-WEBHOOK_PORT = int(os.environ.get("PORT", "8443"))
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
 # --- lazy migration guard for crypto DB ---
 # ===================== DB =====================
@@ -1580,8 +1584,9 @@ async def on_crypto_export_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 def build_app() -> Application:
-    run_migrations()        # tạo crypto tables
-    run_finance_migrations()  # tạo budgets + finance migrations
+    run_migrations()
+            
+            
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -1782,7 +1787,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-def run_finance_migrations():
+def run_migrations():
     """Simple schema migrations using PRAGMA user_version."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -2110,8 +2115,11 @@ async def end_current_conversation_and_reset(update: Update, context: ContextTyp
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     init_db()
-    run_finance_migrations()
-    return await end_current_conversation_and_reset(update, context,
+    
+    run_migrations()
+            
+            
+    return await end_current_conversation_and_reset(update, context, 
         f"Chào mừng bạn đến với Bot Quản lý Tài chính!\n\n"
         f"Sử dụng các nút bên dưới hoặc gõ các lệnh để tương tác.\n"
     )
@@ -3414,20 +3422,10 @@ def main() -> None:
     # This catch-all MessageHandler should be the very last handler to ensure ConversationHandlers get priority.
     # It also ensures that if a user types random text not part of any conversation, they get the main menu.
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, quick_entry_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, show_main_menu_handler))
 
     print("Bot đang chạy...")
-    if WEBHOOK_URL:
-        print(f"Webhook mode: {WEBHOOK_URL}/{BOT_TOKEN}")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=WEBHOOK_PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-            secret_token=WEBHOOK_SECRET if WEBHOOK_SECRET else None,
-        )
-    else:
-        print("Polling mode (dev). Đặt WEBHOOK_URL để dùng Cloudflare.")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     try:
