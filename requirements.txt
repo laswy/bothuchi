@@ -1,7 +1,7 @@
 python-telegram-bot[job-queue]==22.*
 matplotlib
 numpy
-requests
+requests>=2.32.0
 python-dotenv
 openpyxl
 pytz
