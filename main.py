@@ -177,6 +177,17 @@ def run_migrations():
     cur.execute("""CREATE TABLE IF NOT EXISTS budgets (
         user_id INTEGER, category TEXT, amount REAL,
         PRIMARY KEY (user_id, category))""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS recurring_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        ttype TEXT NOT NULL,
+        amount REAL NOT NULL,
+        category TEXT NOT NULL,
+        note TEXT DEFAULT '',
+        day_of_month INTEGER NOT NULL,
+        month INTEGER,
+        last_triggered TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
     conn.commit()
     conn.close()
 
@@ -492,6 +503,51 @@ def db_get_expenses_list(user_id: int, limit: int = 50):
         rows = cur.fetchall(); conn.close(); return rows
     except Exception:
         return []
+
+
+# ── Recurring transactions DB ──────────────────────────
+
+def db_recurring_add(user_id, ttype, amount, category, note, day, month=None):
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""INSERT INTO recurring_transactions
+        (user_id,ttype,amount,category,note,day_of_month,month)
+        VALUES (?,?,?,?,?,?,?)""", (user_id, ttype, amount, category, note or '', day, month))
+    conn.commit(); conn.close()
+
+def db_recurring_list(user_id):
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""SELECT id,ttype,amount,category,note,day_of_month,month,last_triggered
+        FROM recurring_transactions WHERE user_id=? ORDER BY month,day_of_month""", (user_id,))
+    rows = cur.fetchall(); conn.close(); return rows
+
+def db_recurring_get(rec_id):
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""SELECT id,user_id,ttype,amount,category,note,day_of_month,month,last_triggered
+        FROM recurring_transactions WHERE id=?""", (rec_id,))
+    row = cur.fetchone(); conn.close(); return row
+
+def db_recurring_update(rec_id, amount, category, note, day, month):
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""UPDATE recurring_transactions
+        SET amount=?,category=?,note=?,day_of_month=?,month=? WHERE id=?""",
+        (amount, category, note, day, month, rec_id))
+    conn.commit(); conn.close()
+
+def db_recurring_delete(rec_id):
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM recurring_transactions WHERE id=?", (rec_id,))
+    conn.commit(); conn.close()
+
+def db_recurring_update_triggered(rec_id, period_key):
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("UPDATE recurring_transactions SET last_triggered=? WHERE id=?", (period_key, rec_id))
+    conn.commit(); conn.close()
+
+def db_recurring_all():
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""SELECT id,user_id,ttype,amount,category,note,day_of_month,month,last_triggered
+        FROM recurring_transactions""")
+    rows = cur.fetchall(); conn.close(); return rows
 
 
 # ── SECTION 2: _DashboardHandler ───────────────────────
@@ -1970,10 +2026,11 @@ BTN_CEXPORT   = "⬆️ Xuất"
 
 # ─── Finance submenu ────────────────────────────────────────────────────
 BTN_FADD    = "💵 Thêm"
-BTN_FDEL    = "🗑️ Xóa"
-BTN_BUDGET  = "🎯 Ngân Sách"
-BTN_FIMPORT = "⬇️ Nhập File"
-BTN_FEXPORT = "⬆️ Xuất File"
+BTN_FDEL      = "🗑️ Xóa"
+BTN_BUDGET    = "🎯 Ngân Sách"
+BTN_RECURRING = "🔁 Định Kỳ"
+BTN_FIMPORT   = "⬇️ Nhập File"
+BTN_FEXPORT   = "⬆️ Xuất File"
 
 # ─── Shared (route by user_data['submenu']) ──────────────────────────────
 BTN_CHART  = "📈 Biểu Đồ"
@@ -2006,10 +2063,10 @@ def crypto_menu_keyboard() -> ReplyKeyboardMarkup:
 
 def finance_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
-        [KeyboardButton(BTN_FADD),    KeyboardButton(BTN_FDEL)],
-        [KeyboardButton(BTN_BUDGET)],
-        [KeyboardButton(BTN_REPORT),  KeyboardButton(BTN_CHART)],
-        [KeyboardButton(BTN_FIMPORT), KeyboardButton(BTN_FEXPORT)],
+        [KeyboardButton(BTN_FADD),      KeyboardButton(BTN_FDEL)],
+        [KeyboardButton(BTN_BUDGET),    KeyboardButton(BTN_RECURRING)],
+        [KeyboardButton(BTN_REPORT),    KeyboardButton(BTN_CHART)],
+        [KeyboardButton(BTN_FIMPORT),   KeyboardButton(BTN_FEXPORT)],
         [KeyboardButton(BTN_BACK)],
     ], resize_keyboard=True)
 
@@ -2413,6 +2470,17 @@ CHOOSING_CHART_PERIOD = 18
 EXPORT_CHOOSING_FORMAT = 19
 CHOOSING_IMPORT_ACTION = 20
 IMPORT_FILE_UPLOADED = 21
+RECURRING_LIST = 22
+RECURRING_ADD_TYPE = 23
+RECURRING_ADD_AMOUNT = 24
+RECURRING_ADD_CATEGORY = 25
+RECURRING_ADD_NOTE = 26
+RECURRING_ADD_DAY = 27
+RECURRING_ADD_FREQ = 28
+RECURRING_ADD_MONTH = 29
+RECURRING_EDIT_FIELD = 30
+RECURRING_EDIT_VALUE = 31
+RECURRING_DELETE_CONFIRM = 32
 
 # ===================== FINANCE HELPERS =====================
 def anonymize_name(name: str) -> str:
@@ -3142,6 +3210,38 @@ def build_app() -> "Application":
     app.add_handler(export_conv)
     app.add_handler(import_conv)
 
+    recurring_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_RECURRING)}$"), handle_recurring_btn)],
+        states={
+            RECURRING_LIST:[
+                CallbackQueryHandler(recurring_list_callback,    pattern="^recur_add$|^recur_edit_|^recur_del_|^recur_back_list$|^recur_noop_")],
+            RECURRING_ADD_TYPE:[
+                CallbackQueryHandler(recurring_pick_type,        pattern="^recur_type_")],
+            RECURRING_ADD_AMOUNT:[
+                MessageHandler(filters.TEXT & ~filters.COMMAND,  recurring_get_amount)],
+            RECURRING_ADD_CATEGORY:[
+                CallbackQueryHandler(recurring_get_category,     pattern="^income_source_|^expense_category_")],
+            RECURRING_ADD_NOTE:[
+                MessageHandler(filters.TEXT & ~filters.COMMAND,  recurring_get_note)],
+            RECURRING_ADD_DAY:[
+                MessageHandler(filters.TEXT & ~filters.COMMAND,  recurring_get_day)],
+            RECURRING_ADD_FREQ:[
+                CallbackQueryHandler(recurring_pick_freq,        pattern="^recur_freq_")],
+            RECURRING_ADD_MONTH:[
+                CallbackQueryHandler(recurring_pick_month,       pattern="^recur_month_")],
+            RECURRING_EDIT_FIELD:[
+                CallbackQueryHandler(recurring_edit_field,       pattern="^recur_field_|^recur_back_list$")],
+            RECURRING_EDIT_VALUE:[
+                CallbackQueryHandler(recurring_edit_value,       pattern="^income_source_|^expense_category_|^recur_freq_|^recur_edit_month_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND,  recurring_edit_value)],
+            RECURRING_DELETE_CONFIRM:[
+                CallbackQueryHandler(recurring_delete_confirm,   pattern="^recur_del_confirm$|^recur_back_list$")],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation),
+                   CallbackQueryHandler(cancel_conversation_callback, pattern="^cancel_action$")],
+    )
+    app.add_handler(recurring_conv)
+
     # Commands
     app.add_handler(CommandHandler("start",start))
     app.add_handler(CommandHandler("help",help_cmd))
@@ -3161,6 +3261,7 @@ def build_app() -> "Application":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_HOME_FINANCE)}$"), handle_home_finance_btn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_BACK)}$"), handle_back_btn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_BUDGET)}$"), handle_budget_btn))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_RECURRING)}$"), handle_recurring_btn))
 
     # Shared chart/report buttons (routed by submenu state)
     shared_btn_pattern = f"^({'|'.join(re.escape(b) for b in [BTN_CHART, BTN_REPORT])})$"
@@ -3183,9 +3284,317 @@ def build_app() -> "Application":
     app.add_error_handler(error_handler)
     return app
 
+# ===================== RECURRING TRANSACTIONS =====================
+
+def _recurring_freq_str(month) -> str:
+    return "hàng tháng" if month is None else f"hàng năm (tháng {month})"
+
+def _recurring_list_kb(items) -> InlineKeyboardMarkup:
+    kb = []
+    for r in items:
+        rid, ttype, amount, category, note, day, month, _ = r
+        freq = "tháng" if month is None else f"năm/T{month}"
+        icon = "💰" if ttype == "income" else "💸"
+        label = f"{icon} {note or category} {amount:,.0f}đ ngày {day}/{freq}"
+        kb.append([InlineKeyboardButton(label[:48], callback_data=f"recur_noop_{rid}")])
+        kb.append([InlineKeyboardButton("✏️ Sửa", callback_data=f"recur_edit_{rid}"),
+                   InlineKeyboardButton("🗑️ Xóa", callback_data=f"recur_del_{rid}")])
+    kb.append([InlineKeyboardButton("➕ Thêm khoản mới", callback_data="recur_add")])
+    kb.append([InlineKeyboardButton("❌ Đóng", callback_data="cancel_action")])
+    return InlineKeyboardMarkup(kb)
+
+async def handle_recurring_btn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    _clear_keep_submenu(context.user_data)
+    user_id = update.effective_user.id
+    items = db_recurring_list(user_id)
+    msg = (f"🔁 *Giao dịch định kỳ* ({len(items)} khoản):"
+           if items else "🔁 *Giao dịch định kỳ*\nChưa có khoản nào. Nhấn ➕ để thêm.")
+    kb = _recurring_list_kb(items)
+    if update.callback_query:
+        await update.callback_query.answer()
+        try: await update.callback_query.edit_message_text(msg, reply_markup=kb, parse_mode='Markdown')
+        except Exception: await update.callback_query.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+    return RECURRING_LIST
+
+async def recurring_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    if q.data == "recur_add":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 Thu nhập", callback_data="recur_type_income"),
+             InlineKeyboardButton("💸 Chi tiêu",  callback_data="recur_type_expense")],
+            [InlineKeyboardButton("❌ Hủy", callback_data="cancel_action")]])
+        await q.edit_message_text("🔁 *THÊM KHOẢN ĐỊNH KỲ*\nLoại giao dịch?",
+                                  reply_markup=kb, parse_mode='Markdown')
+        return RECURRING_ADD_TYPE
+    elif q.data.startswith("recur_edit_"):
+        rec_id = int(q.data.split("_")[-1])
+        row = db_recurring_get(rec_id)
+        if not row: await q.edit_message_text("Không tìm thấy khoản này."); return ConversationHandler.END
+        context.user_data.update({'recur_edit_id': rec_id, 'recur_edit_row': row})
+        _, _, ttype, amount, category, note, day, month, _ = row
+        info = (f"📋 *Khoản định kỳ hiện tại:*\n"
+                f"Loại: {'💰 Thu nhập' if ttype=='income' else '💸 Chi tiêu'}\n"
+                f"Số tiền: `{amount:,.0f} đ`\n"
+                f"Danh mục: {category}\n"
+                f"Ghi chú: {note or '—'}\n"
+                f"Lịch: ngày {day} {_recurring_freq_str(month)}\n\nSửa trường nào?")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 Số tiền",       callback_data="recur_field_amount"),
+             InlineKeyboardButton("📌 Danh mục",      callback_data="recur_field_category")],
+            [InlineKeyboardButton("📝 Ghi chú",       callback_data="recur_field_note"),
+             InlineKeyboardButton("📅 Ngày/Tần suất", callback_data="recur_field_schedule")],
+            [InlineKeyboardButton("❌ Hủy", callback_data="recur_back_list")]])
+        await q.edit_message_text(info, reply_markup=kb, parse_mode='Markdown')
+        return RECURRING_EDIT_FIELD
+    elif q.data.startswith("recur_del_"):
+        rec_id = int(q.data.split("_")[-1])
+        row = db_recurring_get(rec_id)
+        if not row: await q.edit_message_text("Không tìm thấy."); return ConversationHandler.END
+        context.user_data['recur_del_id'] = rec_id
+        _, _, ttype, amount, category, note, day, month, _ = row
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Xóa", callback_data="recur_del_confirm"),
+             InlineKeyboardButton("◀️ Quay lại", callback_data="recur_back_list")]])
+        await q.edit_message_text(
+            f"Xóa khoản định kỳ:\n*{note or category}* — `{amount:,.0f} đ`\nNgày {day} {_recurring_freq_str(month)}?",
+            reply_markup=kb, parse_mode='Markdown')
+        return RECURRING_DELETE_CONFIRM
+    elif q.data == "recur_back_list":
+        items = db_recurring_list(uid)
+        msg = (f"🔁 *Giao dịch định kỳ* ({len(items)} khoản):"
+               if items else "🔁 *Giao dịch định kỳ*\nChưa có khoản nào.")
+        await q.edit_message_text(msg, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+        return RECURRING_LIST
+    return RECURRING_LIST
+
+# ── Add flow ─────────────────────────────────────────────
+
+async def recurring_pick_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer()
+    context.user_data['recur_ttype'] = q.data.replace("recur_type_", "")
+    await q.edit_message_text("💰 Nhập số tiền (VD: 250k, 1.5tr, 200000):")
+    return RECURRING_ADD_AMOUNT
+
+async def recurring_get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    amount = parse_amount_loose(update.message.text)
+    if not amount or amount <= 0:
+        await update.message.reply_text("⚠️ Số tiền không hợp lệ. Nhập lại (VD: 250k):"); return RECURRING_ADD_AMOUNT
+    context.user_data['recur_amount'] = amount
+    if context.user_data.get('recur_ttype') == 'income':
+        await update.message.reply_text("📌 Chọn nguồn thu nhập:", reply_markup=_income_source_kb())
+    else:
+        await update.message.reply_text("📌 Chọn danh mục chi tiêu:", reply_markup=_expense_cat_kb())
+    return RECURRING_ADD_CATEGORY
+
+async def recurring_get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer()
+    cat = q.data.replace("income_source_", "").replace("expense_category_", "")
+    context.user_data['recur_category'] = cat
+    await q.edit_message_text("📝 Nhập ghi chú (VD: Hóa đơn VNPT), hoặc gõ `-` để bỏ qua:")
+    return RECURRING_ADD_NOTE
+
+async def recurring_get_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    txt = update.message.text.strip()
+    context.user_data['recur_note'] = '' if txt == '-' else txt
+    await update.message.reply_text("📅 Ngày mấy trong tháng sẽ tự ghi? Nhập số (1–28):")
+    return RECURRING_ADD_DAY
+
+async def recurring_get_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        day = int(update.message.text.strip())
+        if not 1 <= day <= 28: raise ValueError
+    except ValueError:
+        await update.message.reply_text("⚠️ Nhập số từ 1 đến 28:"); return RECURRING_ADD_DAY
+    context.user_data['recur_day'] = day
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Hàng tháng", callback_data="recur_freq_monthly"),
+         InlineKeyboardButton("📆 Hàng năm",   callback_data="recur_freq_yearly")]])
+    await update.message.reply_text(f"Lặp lại như thế nào?", reply_markup=kb)
+    return RECURRING_ADD_FREQ
+
+async def recurring_pick_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer()
+    if q.data == "recur_freq_monthly":
+        context.user_data['recur_month'] = None
+        return await _recurring_save_new(q, context)
+    months = ["T1","T2","T3","T4","T5","T6","T7","T8","T9","T10","T11","T12"]
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(m, callback_data=f"recur_month_{i+1}")
+                                for i, m in enumerate(row, start=ri*4)]
+                               for ri, row in enumerate([months[i:i+4] for i in range(0,12,4)])])
+    await q.edit_message_text("Hàng năm vào tháng nào?", reply_markup=kb)
+    return RECURRING_ADD_MONTH
+
+async def recurring_pick_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer()
+    context.user_data['recur_month'] = int(q.data.replace("recur_month_", ""))
+    return await _recurring_save_new(q, context)
+
+async def _recurring_save_new(q, context) -> int:
+    uid = q.from_user.id; d = context.user_data
+    db_recurring_add(uid, d['recur_ttype'], d['recur_amount'], d['recur_category'],
+                     d.get('recur_note', ''), d['recur_day'], d.get('recur_month'))
+    freq = _recurring_freq_str(d.get('recur_month'))
+    icon = "💰" if d['recur_ttype'] == 'income' else "💸"
+    saved = (f"✅ *Đã thêm khoản định kỳ*\n"
+             f"{icon} `{d['recur_amount']:,.0f} đ` — {d['recur_category']}\n"
+             f"📝 {d.get('recur_note') or '—'}\n"
+             f"📅 Ngày {d['recur_day']} {freq}")
+    items = db_recurring_list(uid)
+    try:
+        await q.edit_message_text(saved + f"\n\n🔁 *Danh sách ({len(items)} khoản):*",
+                                  reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+    except Exception:
+        await q.message.reply_text(saved, parse_mode='Markdown')
+    return RECURRING_LIST
+
+# ── Delete flow ───────────────────────────────────────────
+
+async def recurring_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer(); uid = q.from_user.id
+    if q.data == "recur_del_confirm":
+        db_recurring_delete(context.user_data.get('recur_del_id', 0))
+    items = db_recurring_list(uid)
+    msg = (f"✅ Đã xóa.\n\n🔁 *Danh sách ({len(items)} khoản):*"
+           if q.data == "recur_del_confirm" else
+           f"🔁 *Giao dịch định kỳ* ({len(items)} khoản):" if items else
+           "🔁 *Giao dịch định kỳ*\nChưa có khoản nào.")
+    await q.edit_message_text(msg, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+    return RECURRING_LIST
+
+# ── Edit flow ─────────────────────────────────────────────
+
+async def recurring_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer()
+    if q.data == "recur_back_list":
+        uid = q.from_user.id; items = db_recurring_list(uid)
+        msg = f"🔁 *Giao dịch định kỳ* ({len(items)} khoản):" if items else "🔁 Chưa có khoản nào."
+        await q.edit_message_text(msg, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+        return RECURRING_LIST
+    field = q.data.replace("recur_field_", "")
+    context.user_data['recur_edit_field'] = field
+    _, _, ttype, amount, category, note, day, month, _ = context.user_data['recur_edit_row']
+    if field == 'amount':
+        await q.edit_message_text(f"Số tiền hiện tại: `{amount:,.0f} đ`\nNhập số tiền mới:", parse_mode='Markdown')
+    elif field == 'category':
+        kb = _income_source_kb() if ttype == 'income' else _expense_cat_kb()
+        await q.edit_message_text(f"Danh mục hiện tại: *{category}*\nChọn danh mục mới:", reply_markup=kb, parse_mode='Markdown')
+    elif field == 'note':
+        await q.edit_message_text(f"Ghi chú hiện tại: *{note or '—'}*\nNhập ghi chú mới (hoặc `-` để xóa):", parse_mode='Markdown')
+    elif field == 'schedule':
+        await q.edit_message_text(f"Lịch hiện tại: ngày *{day}* {_recurring_freq_str(month)}\nNhập ngày mới (1–28):", parse_mode='Markdown')
+    return RECURRING_EDIT_VALUE
+
+async def recurring_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    field = context.user_data.get('recur_edit_field')
+    rec_id = context.user_data.get('recur_edit_id')
+    _, _, ttype, amount, category, note, day, month, _ = context.user_data['recur_edit_row']
+    uid = update.effective_user.id
+
+    if update.callback_query:
+        q = update.callback_query; await q.answer()
+        if field == 'category':
+            new_cat = q.data.replace("income_source_", "").replace("expense_category_", "")
+            db_recurring_update(rec_id, amount, new_cat, note, day, month)
+            info = f"✅ Đã cập nhật danh mục → *{new_cat}*"
+        elif field == 'schedule' and q.data.startswith("recur_freq_"):
+            if q.data == "recur_freq_yearly":
+                new_day = context.user_data.get('recur_edit_new_day', day)
+                context.user_data['recur_edit_day_tmp'] = new_day
+                months = ["T1","T2","T3","T4","T5","T6","T7","T8","T9","T10","T11","T12"]
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton(m, callback_data=f"recur_edit_month_{i+1}")
+                                           for i, m in enumerate(row, start=ri*4)]
+                                          for ri, row in enumerate([months[i:i+4] for i in range(0,12,4)])])
+                await q.edit_message_text("Vào tháng nào?", reply_markup=kb); return RECURRING_EDIT_VALUE
+            else:
+                new_day = context.user_data.get('recur_edit_new_day', day)
+                db_recurring_update(rec_id, amount, category, note, new_day, None)
+                info = f"✅ Đã cập nhật lịch → ngày {new_day} hàng tháng"
+        elif field == 'schedule' and q.data.startswith("recur_edit_month_"):
+            new_month = int(q.data.replace("recur_edit_month_", ""))
+            new_day = context.user_data.get('recur_edit_day_tmp', day)
+            db_recurring_update(rec_id, amount, category, note, new_day, new_month)
+            info = f"✅ Đã cập nhật lịch → ngày {new_day} tháng {new_month} hàng năm"
+        else:
+            info = ""
+        items = db_recurring_list(uid)
+        await q.edit_message_text(
+            (info + f"\n\n🔁 *Danh sách ({len(items)} khoản):*") if info else f"🔁 *Danh sách ({len(items)} khoản):*",
+            reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+        return RECURRING_LIST
+
+    # Text input
+    text = update.message.text.strip()
+    if field == 'amount':
+        new_amount = parse_amount_loose(text)
+        if not new_amount or new_amount <= 0:
+            await update.message.reply_text("⚠️ Số tiền không hợp lệ. Nhập lại:"); return RECURRING_EDIT_VALUE
+        db_recurring_update(rec_id, new_amount, category, note, day, month)
+        await update.message.reply_text(f"✅ Đã cập nhật số tiền → `{new_amount:,.0f} đ`", parse_mode='Markdown')
+    elif field == 'note':
+        new_note = '' if text == '-' else text
+        db_recurring_update(rec_id, amount, category, new_note, day, month)
+        await update.message.reply_text(f"✅ Đã cập nhật ghi chú → *{new_note or '—'}*", parse_mode='Markdown')
+    elif field == 'schedule':
+        try:
+            new_day = int(text)
+            if not 1 <= new_day <= 28: raise ValueError
+        except ValueError:
+            await update.message.reply_text("⚠️ Nhập số từ 1 đến 28:"); return RECURRING_EDIT_VALUE
+        context.user_data['recur_edit_new_day'] = new_day
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 Hàng tháng", callback_data="recur_freq_monthly"),
+             InlineKeyboardButton("📆 Hàng năm",   callback_data="recur_freq_yearly")]])
+        await update.message.reply_text(f"Ngày {new_day} — tần suất?", reply_markup=kb)
+        return RECURRING_EDIT_VALUE
+    items = db_recurring_list(uid)
+    await update.message.reply_text(
+        f"🔁 *Danh sách ({len(items)} khoản):*",
+        reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+    return RECURRING_LIST
+
+# ── Daily job ─────────────────────────────────────────────
+
+async def check_recurring_job(context: ContextTypes.DEFAULT_TYPE):
+    today = datetime.datetime.now()
+    rows = db_recurring_all()
+    for row in rows:
+        rec_id, user_id, ttype, amount, category, note, day, month, last_triggered = row
+        if today.day != day: continue
+        period_key = today.strftime('%Y-%m') if month is None else today.strftime('%Y')
+        if month is not None and today.month != month: continue
+        if last_triggered == period_key: continue
+        created_at = today
+        if ttype == 'income':
+            db_add_income(user_id, amount, category, note or '', created_at)
+        else:
+            db_add_expense(user_id, amount, note or '', category, created_at)
+        db_recurring_update_triggered(rec_id, period_key)
+        freq = _recurring_freq_str(month)
+        icon = "💰" if ttype == 'income' else "💸"
+        msg = (f"🔁 *Giao dịch định kỳ tự động*\n"
+               f"{icon} `{amount:,.0f} đ` — {category}\n"
+               f"📝 {note or '—'}\n"
+               f"📅 {freq.capitalize()} ngày {day}")
+        try:
+            await context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
+        except Exception as e:
+            logger.warning(f"Recurring notify failed user {user_id}: {e}")
+
+
 # ===================== MAIN =====================
 if __name__ == "__main__":
     start_html_server()
     app = build_app()
+    # Schedule daily recurring check at 08:00
+    import datetime as _dt
+    job_queue = app.job_queue
+    if job_queue is not None:
+        trigger_time = _dt.time(hour=8, minute=0, tzinfo=None)
+        job_queue.run_daily(check_recurring_job, time=trigger_time, name="recurring_daily")
+        # Also run once on startup to catch any missed triggers from today
+        job_queue.run_once(check_recurring_job, when=5, name="recurring_startup")
     logger.info(f"Bot đang chạy... HTML dashboard port {HTML_PORT}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
