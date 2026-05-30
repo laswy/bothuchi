@@ -14,8 +14,8 @@ fi
 # Kích hoạt venv
 source "$VENV/bin/activate"
 
-# Cài / cập nhật thư viện
-pip install -q -r "$DIR/requirements.txt"
+# Cài / cập nhật thư viện (bỏ qua cache để tránh lỗi deserialization)
+pip install -q --no-cache-dir -r "$DIR/requirements.txt"
 
 # Tạo .env nếu chưa có
 if [ ! -f "$DIR/.env" ]; then
