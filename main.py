@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Univer All-in-One Bot
-- Telegram bot (python-telegram-bot v21 async)
+- Telegram bot (python-telegram-bot v22 async, Python 3.9+)
 - Crypto portfolio (CoinGecko, themes, charts)
 - Personal finance (income/expense, budgets, reports, charts)
 - HTML dashboard server
@@ -28,7 +28,6 @@ from matplotlib.patches import FancyBboxPatch, Circle
 from matplotlib import gridspec
 import numpy as np
 import requests
-from typing import List, Dict, Optional
 
 try:
     import openpyxl
@@ -122,12 +121,12 @@ THEMES = {
     },
 }
 DEFAULT_THEME = "dark"
-_user_themes: Dict[int, str] = {}
+_user_themes: dict[int, str] = {}
 
 # ===================== RATE LIMITER =====================
 RATE_WINDOW = 60
 RATE_MAX_CALLS = 10
-_rate_store: Dict[int, list] = {}
+_rate_store: dict[int, list] = {}
 
 def is_rate_limited(user_id: int) -> bool:
     now = datetime.datetime.now().timestamp()
@@ -709,7 +708,7 @@ def cg_guess_id_from_symbol(symbol: str) -> Optional[str]:
     }
     return static.get(symbol.upper())
 
-def cg_simple_price_usd(cg_ids: List[str]) -> Dict[str, float]:
+def cg_simple_price_usd(cg_ids: list[str]) -> dict[str, float]:
     if not cg_ids: return {}
     ids_param = ",".join(sorted(set(cg_ids)))
     url = f"{COINGECKO_BASE}/simple/price?ids={quote(ids_param)}&vs_currencies=usd"
@@ -728,7 +727,7 @@ def cg_market_chart_usd(cg_id: str, days: int = 365):
         if r.status_code != 200: return {}
         out = {}
         for ts, price in r.json().get("prices", []):
-            dt = datetime.datetime.utcfromtimestamp(ts/1000.0)
+            dt = datetime.datetime.fromtimestamp(ts/1000.0, tz=datetime.timezone.utc)
             label = dt.strftime('%H:%M') if days<=1 else dt.date().isoformat()
             out[label] = float(price)
         return out
