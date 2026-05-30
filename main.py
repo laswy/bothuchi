@@ -1721,14 +1721,11 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         fmt   = qs.get("format", ["csv"])[0]
         try:
             if scope == "crypto":
-                rows  = db_crypto_get_trades(uid) if uid else []
-                heads = ["id","symbol","cg_id","side","qty","price_usd","fee_usd","note","created_at"]
+                rows  = db_crypto_all_trades(uid) if uid else []
+                heads = ["symbol","cg_id","side","qty","price_usd","fee_usd","note","created_at"]
             else:
-                inc = db_get_incomes_list(uid, 1000) if uid else []
-                exp = db_get_expenses_list(uid, 1000) if uid else []
-                rows  = [("INC", r[0], r[1], r[2], r[3], r[4]) for r in inc] + \
-                        [("EXP", r[0], r[1], r[2], r[3], r[4]) for r in exp]
-                heads = ["type","id","amount","cat_or_source","note","created_at"]
+                rows  = db_export_data(uid) if uid else []
+                heads = ["Loại","Số tiền","Ghi chú","Danh mục/Nguồn","Ngày","ID"]
 
             fname = f"{scope}_export"
             if fmt == "excel":
@@ -1910,18 +1907,21 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                         if cg:
                             db_crypto_upsert_map(sym, cg)
                     else:  # finance
-                        ttype  = str(row.get("type") or row.get("ttype") or "expense").strip()
-                        amount = float(row.get("amount") or 0)
-                        cat_   = str(row.get("cat_or_source") or row.get("category") or row.get("source") or "Khác")
-                        note   = str(row.get("note") or "")
-                        dat    = str(row.get("created_at") or row.get("date") or "").strip()
+                        ttype  = str(row.get("type") or row.get("ttype") or row.get("loại") or "expense").strip()
+                        amount = float(row.get("amount") or row.get("số tiền") or row.get("số_tiền") or 0)
+                        cat_   = str(row.get("cat_or_source") or row.get("category") or row.get("source")
+                                     or row.get("danh mục/nguồn") or row.get("danh_mục/nguồn") or "Khác")
+                        note   = str(row.get("note") or row.get("ghi chú") or row.get("ghi_chú") or "")
+                        dat    = str(row.get("created_at") or row.get("date") or row.get("ngày") or "").strip()
                         if amount <= 0:
                             failed += 1; continue
                         try:
                             cat_dt = datetime.datetime.fromisoformat(dat) if dat else datetime.datetime.now()
                         except Exception:
                             cat_dt = datetime.datetime.now()
-                        if ttype.upper().startswith("INC") or ttype.lower() == "income":
+                        is_income = (ttype.upper().startswith("INC") or
+                                     ttype.lower() in ("income", "thu nhập", "thu nhap"))
+                        if is_income:
                             db_add_income(uid, amount, cat_, note, cat_dt)
                         else:
                             db_add_expense(uid, amount, note, cat_, cat_dt)
