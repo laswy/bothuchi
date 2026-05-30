@@ -2003,11 +2003,21 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 # ── SECTION 3: _make_html (full replacement) ───────────
 
 def start_html_server():
-    server = HTTPServer(("0.0.0.0", HTML_PORT), _DashboardHandler)
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    logger.info(f"HTML dashboard running on port {HTML_PORT}")
-    return server
+    global HTML_PORT
+    for port in range(HTML_PORT, HTML_PORT + 10):
+        try:
+            server = HTTPServer(("0.0.0.0", port), _DashboardHandler)
+            if port != HTML_PORT:
+                logger.warning(f"Port {HTML_PORT} đã bị chiếm, dùng port {port}")
+                HTML_PORT = port
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+            logger.info(f"HTML dashboard running on port {HTML_PORT}")
+            return server
+        except OSError:
+            continue
+    logger.error("Không tìm được port trống (8080–8089). Dashboard không khởi động.")
+    return None
 
 # ===================== KEYBOARDS =====================
 # ─── Home ───────────────────────────────────────────────────────────────
