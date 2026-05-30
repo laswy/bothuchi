@@ -57,8 +57,8 @@ DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET", "")  # nếu đặt, URL c
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 
 OWNER_USER_ID   = 679130099
-CHANNEL_CHAT_ID = -1001974996093
-FINANCE_CHANNEL_ID = "@congthuchi"
+CHANNEL_CHAT_ID    = int(os.environ.get("CHANNEL_CHAT_ID",    "-1001974996093"))
+FINANCE_CHANNEL_ID = os.environ.get("FINANCE_CHANNEL_ID") or CHANNEL_CHAT_ID
 
 LARGE_AMOUNT_THRESHOLD = 100_000_000
 
@@ -430,6 +430,12 @@ def db_crypto_delete_trade(trade_id: int):
     """DELETE FROM crypto_trades WHERE id=?"""
     conn = db_conn(); cur = conn.cursor()
     cur.execute("DELETE FROM crypto_trades WHERE id=?", (trade_id,))
+    conn.commit(); conn.close()
+
+
+def db_crypto_reset_all(user_id: int):
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM crypto_trades WHERE user_id=?", (user_id,))
     conn.commit(); conn.close()
 
 
@@ -1990,7 +1996,7 @@ def crypto_menu_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(BTN_SELL),      KeyboardButton(BTN_CHART)],
         [KeyboardButton(BTN_REPORT),    KeyboardButton(BTN_MAP)],
         [KeyboardButton(BTN_CIMPORT),   KeyboardButton(BTN_CEXPORT)],
-        [KeyboardButton(BTN_BACK)],
+        [KeyboardButton(BTN_FDEL),      KeyboardButton(BTN_BACK)],
     ], resize_keyboard=True)
 
 def finance_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -2632,35 +2638,64 @@ async def get_expense_category(update: Update, context: ContextTypes.DEFAULT_TYP
 # ===================== DELETE FLOW =====================
 async def handle_delete_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("Xóa giao dịch",callback_data="delete_action_individual")],
-        [InlineKeyboardButton("Đặt lại toàn bộ",callback_data="delete_action_reset_all")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
+    submenu = context.user_data.get('submenu', 'finance')
+    if submenu == 'crypto':
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Xóa giao dịch Crypto", callback_data="delete_action_individual")],
+            [InlineKeyboardButton("Đặt lại toàn bộ Crypto", callback_data="delete_action_reset_crypto")],
+            [InlineKeyboardButton("❌ Hủy bỏ", callback_data="cancel_action")]])
+        prompt = "🗑️ Xóa dữ liệu Crypto?"
+    else:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Xóa giao dịch", callback_data="delete_action_individual")],
+            [InlineKeyboardButton("Đặt lại toàn bộ", callback_data="delete_action_reset_all")],
+            [InlineKeyboardButton("❌ Hủy bỏ", callback_data="cancel_action")]])
+        prompt = "Bạn muốn làm gì?"
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("Bạn muốn làm gì?",reply_markup=kb)
+        await update.callback_query.edit_message_text(prompt, reply_markup=kb)
     else:
-        await update.message.reply_text("Bạn muốn làm gì?",reply_markup=kb)
+        await update.message.reply_text(prompt, reply_markup=kb)
     return DELETE_CHOOSING_ACTION
 
 async def choose_delete_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q=update.callback_query; await q.answer()
     if q.data=="delete_action_individual":
-        user_id=update.effective_user.id; txs=db_get_last_n_transactions(user_id,5)
-        if not txs: return await end_conv(update,context,"Chưa có giao dịch để xóa.")
-        msg="5 giao dịch gần nhất:\n\n"; kb=[]
-        for i,t in enumerate(txs):
-            tid,ttype,amount,note,cat,cat_str=t
-            tname="Chi tiêu" if ttype=="expense" else "Thu nhập"
-            dt=datetime.datetime.fromisoformat(cat_str).strftime('%d/%m/%Y')
-            msg+=f"*{i+1}.* [{tname}] {amount:,.0f} đ - `{note}` ({cat}) - {dt}\n"
-            kb.append([InlineKeyboardButton(f"Xóa mục {i+1}",callback_data=f"delete_id_{tid}_{ttype}")])
-        kb.append([InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")])
-        await q.edit_message_text(msg,reply_markup=InlineKeyboardMarkup(kb),parse_mode='Markdown')
+        user_id=update.effective_user.id
+        submenu=context.user_data.get('submenu','finance')
+        if submenu=='crypto':
+            trades=db_crypto_get_trades(user_id)[:5]
+            if not trades: return await end_conv(update,context,"Chưa có giao dịch Crypto để xóa.")
+            msg="5 giao dịch Crypto gần nhất:\n\n"; kb=[]
+            for i,t in enumerate(trades):
+                tid,sym,_cg,side,qty,price,_fee,_note,cat_str=t
+                dt=datetime.datetime.fromisoformat(str(cat_str)).strftime('%d/%m/%Y') if cat_str else ''
+                msg+=f"*{i+1}.* [{side}] {sym} {qty} @ ${price:,.2f} - {dt}\n"
+                kb.append([InlineKeyboardButton(f"Xóa #{i+1}",callback_data=f"delete_id_{tid}_crypto")])
+            kb.append([InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")])
+            await q.edit_message_text(msg,reply_markup=InlineKeyboardMarkup(kb),parse_mode='Markdown')
+        else:
+            txs=db_get_last_n_transactions(user_id,5)
+            if not txs: return await end_conv(update,context,"Chưa có giao dịch để xóa.")
+            msg="5 giao dịch gần nhất:\n\n"; kb=[]
+            for i,t in enumerate(txs):
+                tid,ttype,amount,note,cat,cat_str=t
+                tname="Chi tiêu" if ttype=="expense" else "Thu nhập"
+                dt=datetime.datetime.fromisoformat(cat_str).strftime('%d/%m/%Y')
+                msg+=f"*{i+1}.* [{tname}] {amount:,.0f} đ - `{note}` ({cat}) - {dt}\n"
+                kb.append([InlineKeyboardButton(f"Xóa mục {i+1}",callback_data=f"delete_id_{tid}_{ttype}")])
+            kb.append([InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")])
+            await q.edit_message_text(msg,reply_markup=InlineKeyboardMarkup(kb),parse_mode='Markdown')
         return DELETE_INDIVIDUAL_LISTING
     elif q.data=="delete_action_reset_all":
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Có, chắc chắn",callback_data="reset_confirm_1_yes")],
             [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
         await q.edit_message_text("Xóa TẤT CẢ dữ liệu tài chính? Không thể hoàn tác.",reply_markup=kb)
+        return RESET_DATA_CONFIRM_STEP1
+    elif q.data=="delete_action_reset_crypto":
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Có, chắc chắn",callback_data="reset_confirm_1_crypto")],
+            [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
+        await q.edit_message_text("Xóa TẤT CẢ giao dịch Crypto? Không thể hoàn tác.",reply_markup=kb)
         return RESET_DATA_CONFIRM_STEP1
     return await cancel_conversation_callback(update,context)
 
@@ -2668,9 +2703,15 @@ async def delete_choose_item(update: Update, context: ContextTypes.DEFAULT_TYPE)
     q=update.callback_query; await q.answer()
     parts=q.data.split('_'); trans_id=int(parts[2]); trans_type=parts[3]
     context.user_data['id_to_delete']=trans_id; context.user_data['type_to_delete']=trans_type
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Xác nhận XÓA",callback_data="confirm_delete_yes")],
+    if trans_type=='crypto':
+        label=f"Crypto ID {trans_id}"
+        confirm_cb="confirm_delete_crypto_yes"
+    else:
+        label=f"ID {trans_id} ({'Thu nhập' if trans_type=='income' else 'Chi tiêu'})"
+        confirm_cb="confirm_delete_yes"
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Xác nhận XÓA",callback_data=confirm_cb)],
         [InlineKeyboardButton("❌ Hủy",callback_data="cancel_action")]])
-    await q.edit_message_text(f"Xóa giao dịch ID {trans_id} ({'Thu nhập' if trans_type=='income' else 'Chi tiêu'})?",reply_markup=kb)
+    await q.edit_message_text(f"Xóa giao dịch {label}?",reply_markup=kb)
     return DELETE_INDIVIDUAL_CONFIRM
 
 async def delete_confirm_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2678,6 +2719,9 @@ async def delete_confirm_action(update: Update, context: ContextTypes.DEFAULT_TY
     if q.data=="confirm_delete_yes":
         db_delete_transaction(context.user_data.get('id_to_delete'),context.user_data.get('type_to_delete'))
         return await end_conv(update,context,"✅ Đã xóa giao dịch.")
+    elif q.data=="confirm_delete_crypto_yes":
+        db_crypto_delete_trade(context.user_data.get('id_to_delete'))
+        return await end_conv(update,context,"✅ Đã xóa giao dịch Crypto.")
     return await end_conv(update,context,"Đã hủy.")
 
 async def reset_data_confirmation_1_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2687,13 +2731,21 @@ async def reset_data_confirmation_1_handler(update: Update, context: ContextType
             [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
         await q.edit_message_text("Xác nhận cuối: XÓA toàn bộ dữ liệu? Không thể khôi phục.",reply_markup=kb)
         return RESET_DATA_CONFIRM_STEP2
+    elif q.data=="reset_confirm_1_crypto":
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("🔥 XÓA TẤT CẢ CRYPTO",callback_data="reset_confirm_2_crypto")],
+            [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
+        await q.edit_message_text("Xác nhận cuối: XÓA toàn bộ Crypto? Không thể khôi phục.",reply_markup=kb)
+        return RESET_DATA_CONFIRM_STEP2
     return await cancel_conversation_callback(update,context)
 
 async def reset_data_confirmation_2_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q=update.callback_query; await q.answer()
     if q.data=="reset_confirm_2_yes":
         db_reset_all_data(q.from_user.id)
-        return await end_conv(update,context,"✅ Đã xóa toàn bộ dữ liệu.")
+        return await end_conv(update,context,"✅ Đã xóa toàn bộ dữ liệu tài chính.")
+    elif q.data=="reset_confirm_2_crypto":
+        db_crypto_reset_all(q.from_user.id)
+        return await end_conv(update,context,"✅ Đã xóa toàn bộ dữ liệu Crypto.")
     return await end_conv(update,context,"Đã hủy.")
 
 # ===================== REPORT & CHART FLOWS =====================
