@@ -50,9 +50,10 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # ===================== CONFIG =====================
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-DB_PATH = os.environ.get("UNIVER_DB_PATH", "univer_all_in_one.db")
-HTML_PORT = int(os.environ.get("HTML_PORT", "8080"))
+BOT_TOKEN        = os.environ["TELEGRAM_BOT_TOKEN"]
+DB_PATH          = os.environ.get("UNIVER_DB_PATH", "univer_all_in_one.db")
+HTML_PORT        = int(os.environ.get("HTML_PORT", "8080"))
+DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET", "")  # nếu đặt, URL cần ?token=xxx
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 
 OWNER_USER_ID   = 679130099
@@ -1243,6 +1244,16 @@ donut('expDonut','Chi tiêu theo danh mục',D.exp_donut);
 class _DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path); qs = parse_qs(parsed.query)
+        # Kiểm tra secret token nếu đã cấu hình DASHBOARD_SECRET
+        if DASHBOARD_SECRET:
+            token = qs.get("token", [""])[0]
+            if token != DASHBOARD_SECRET:
+                body = b"<h2>403 Forbidden</h2><p>Thieu token hoac token sai.</p>"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers(); self.wfile.write(body)
+                return
         uid = None
         try: uid = int(qs["user_id"][0])
         except Exception: pass
@@ -1531,11 +1542,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    token_part = f"&token={DASHBOARD_SECRET}" if DASHBOARD_SECRET else ""
+    local_link = f"http://localhost:{HTML_PORT}?user_id={uid}{token_part}"
+    secret_note = (f"\n🔑 Token: `{DASHBOARD_SECRET}`" if DASHBOARD_SECRET else
+                   "\n⚠️ Chưa đặt DASHBOARD\\_SECRET — nên thêm vào .env trước khi dùng Cloudflare")
     await update.message.reply_text(
         f"🌐 *HTML Dashboard*\n\n"
         f"🪪 Telegram ID: `{uid}`\n"
-        f"🔗 Link: `http://localhost:{HTML_PORT}?user_id={uid}`\n\n"
-        "Nếu bot chạy trên máy khác, thay `localhost` bằng IP của máy đó.",
+        f"🔗 Local: `{local_link}`{secret_note}\n\n"
+        "Nếu dùng Cloudflare Tunnel, thay `localhost` bằng URL tunnel của bạn.",
         parse_mode="Markdown")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
