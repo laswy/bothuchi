@@ -789,7 +789,17 @@ def gen_portfolio_table_image(positions, prices, theme: str = DEFAULT_THEME) -> 
 # ===================== FINANCE CHARTS =====================
 def get_period_dates(period_choice: str):
     today = datetime.datetime.now()
-    if period_choice == "week":
+    if period_choice.startswith("m_"):          # m_YYYYMM
+        y, m = int(period_choice[2:6]), int(period_choice[6:8])
+        start = datetime.datetime(y, m, 1)
+        end = ((start.replace(day=28)+datetime.timedelta(days=4))-datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
+        suffix = f"tháng {m:02d}/{y}"
+    elif period_choice.startswith("y_"):        # y_YYYY
+        y = int(period_choice[2:])
+        start = datetime.datetime(y, 1, 1)
+        end = datetime.datetime(y, 12, 31, 23, 59, 59)
+        suffix = f"năm {y}"
+    elif period_choice == "week":
         start = (today - datetime.timedelta(days=today.weekday())).replace(hour=0,minute=0,second=0,microsecond=0)
         end = start + datetime.timedelta(days=6,hours=23,minutes=59,seconds=59)
         suffix = f"tuần này ({start.strftime('%d/%m')} - {end.strftime('%d/%m')})"
@@ -806,6 +816,41 @@ def get_period_dates(period_choice: str):
     else:
         return None, None, None
     return start, end, suffix
+
+def _initial_period_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Tuần này",    callback_data=f"{prefix}_week")],
+        [InlineKeyboardButton("📆 Chọn tháng", callback_data=f"{prefix}_pick_month")],
+        [InlineKeyboardButton("🗓️ Chọn năm",  callback_data=f"{prefix}_pick_year")],
+        [InlineKeyboardButton("⏰ Toàn bộ",    callback_data=f"{prefix}_all")],
+        [InlineKeyboardButton("❌ Hủy bỏ",     callback_data="cancel_action")],
+    ])
+
+def _month_picker_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    """Last 13 months (current + 12 previous), 3 per row."""
+    now = datetime.datetime.now()
+    buttons, row = [], []
+    for i in range(13):
+        m = now.month - i; y = now.year
+        while m <= 0: m += 12; y -= 1
+        label = f"{m:02d}/{y}"
+        row.append(InlineKeyboardButton(label, callback_data=f"{prefix}_m_{y}{m:02d}"))
+        if len(row) == 3: buttons.append(row); row = []
+    if row: buttons.append(row)
+    buttons.append([InlineKeyboardButton("↩️ Quay lại", callback_data=f"{prefix}_back"),
+                    InlineKeyboardButton("❌ Hủy",       callback_data="cancel_action")])
+    return InlineKeyboardMarkup(buttons)
+
+def _year_picker_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    """Last 5 years, all in one row."""
+    now = datetime.datetime.now()
+    row = [InlineKeyboardButton(str(now.year - i), callback_data=f"{prefix}_y_{now.year - i}") for i in range(5)]
+    return InlineKeyboardMarkup([
+        row,
+        [InlineKeyboardButton("↩️ Quay lại", callback_data=f"{prefix}_back"),
+         InlineKeyboardButton("❌ Hủy",       callback_data="cancel_action")],
+    ])
+
 
 def gen_finance_charts(user_id: int, period_choice: str) -> list:
     """Return list of (BytesIO, caption) tuples for all generated charts."""
@@ -864,25 +909,25 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
         cap = f"📊 Thu chi {title_suffix}\n💰 Thu: {ti:,.0f}  💸 Chi: {te:,.0f}  {'✅' if nb>=0 else '⚠️'} Cân đối: {nb:,.0f}"
         charts.append((buf, cap))
 
-    # 3. Heatmap (week/month/year)
-    if period_choice in ("week","month","year"):
+    # 3. Heatmap (week / specific month / specific year / month / year)
+    is_day_view  = period_choice in ("week","month") or period_choice.startswith("m_")
+    is_year_view = period_choice in ("year",)        or period_choice.startswith("y_")
+    if is_day_view or is_year_view:
         conn = db_conn(); cur = conn.cursor()
-        today_d = datetime.date.today()
+        if start_date is None: start_date = datetime.datetime(2000,1,1)
+        if end_date   is None: end_date   = datetime.datetime.now()
         if period_choice == "week":
-            sd = today_d - datetime.timedelta(days=today_d.weekday())
-            ed = sd + datetime.timedelta(days=6)
+            sd = start_date.date(); ed = end_date.date()
             grp = "strftime('%Y-%m-%d',created_at)"; x_label = "day"
-            htitle = "Heatmap Chi Tiêu Theo Ngày (Tuần này)"
-        elif period_choice == "month":
-            sd = today_d.replace(day=1)
-            nm = (sd.replace(day=28)+datetime.timedelta(days=4)).replace(day=1)
-            ed = nm - datetime.timedelta(days=1)
+            htitle = f"Heatmap Chi Tiêu Theo Ngày ({title_suffix})"
+        elif is_day_view:                             # month or m_YYYYMM
+            sd = start_date.date(); ed = end_date.date()
             grp = "strftime('%Y-%m-%d',created_at)"; x_label = "day"
-            htitle = "Heatmap Chi Tiêu Theo Ngày (Tháng này)"
-        else:
-            sd = today_d.replace(month=1,day=1); ed = today_d.replace(month=12,day=31)
+            htitle = f"Heatmap Chi Tiêu Theo Ngày ({title_suffix})"
+        else:                                         # year or y_YYYY
+            sd = start_date.date(); ed = end_date.date()
             grp = "strftime('%Y-%m',created_at)"; x_label = "month"
-            htitle = "Heatmap Chi Tiêu Theo Tháng (Năm nay)"
+            htitle = f"Heatmap Chi Tiêu Theo Tháng ({title_suffix})"
         end_incl = ed + datetime.timedelta(days=1)
         cur.execute(f"SELECT {grp},category,SUM(amount) FROM expenses WHERE user_id=? AND created_at>=? AND created_at<? GROUP BY 1,2 ORDER BY 1",
                     (user_id, sd.isoformat(), end_incl.isoformat()))
@@ -1749,97 +1794,122 @@ async def reset_data_confirmation_2_handler(update: Update, context: ContextType
 # ===================== REPORT & CHART FLOWS =====================
 async def report_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    kb=InlineKeyboardMarkup([
-        [InlineKeyboardButton("📅 Theo tuần",callback_data="report_period_week")],
-        [InlineKeyboardButton("📆 Theo tháng",callback_data="report_period_month")],
-        [InlineKeyboardButton("🗓️ Theo năm",callback_data="report_period_year")],
-        [InlineKeyboardButton("⏰ Toàn bộ",callback_data="report_period_all")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]
-    ])
-    msg="📊 *CHỌN KỲ BÁO CÁO*\nChọn khoảng thời gian:"
+    kb = _initial_period_keyboard("report_period")
+    msg = "📊 *CHỌN KỲ BÁO CÁO*\nChọn khoảng thời gian:"
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(msg,reply_markup=kb,parse_mode='Markdown')
+        await update.callback_query.edit_message_text(msg, reply_markup=kb, parse_mode='Markdown')
     else:
-        await update.message.reply_text(msg,reply_markup=kb,parse_mode='Markdown')
+        await update.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
     return CHOOSING_REPORT_PERIOD
 
 async def generate_report_for_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
-    if q.data=="cancel_action": return await cancel_conversation_callback(update,context)
-    period=q.data.replace("report_period_",""); user_id=q.from_user.id
-    loading=await q.edit_message_text("⏳ Đang tạo báo cáo...")
-    start_date,end_date,title_suffix=get_period_dates(period)
-    income,expense,balance=db_get_combined_summary(user_id,start_date,end_date)
-    incomes_g=db_list_incomes_grouped(user_id,start_date,end_date)
-    expenses_g=db_list_expenses_grouped(user_id,start_date,end_date)
-    report=(f"📋 *BÁO CÁO {title_suffix.upper()}*\n{'='*30}\n\n"
-            f"💼 *TỔNG QUAN*\n"
-            f"┃ 📈 Thu nhập: `{income:,.0f} VND`\n"
-            f"┃ 📉 Chi tiêu: `{expense:,.0f} VND`\n"
-            f"┃ 💰 Số dư: `{balance:,.0f} VND`\n\n")
+    q = update.callback_query; await q.answer()
+    if q.data == "cancel_action":
+        return await cancel_conversation_callback(update, context)
+    period = q.data.replace("report_period_", "")
+    # Sub-navigation: back to initial menu
+    if period == "back":
+        await q.edit_message_text("📊 *CHỌN KỲ BÁO CÁO*\nChọn khoảng thời gian:",
+                                  reply_markup=_initial_period_keyboard("report_period"), parse_mode='Markdown')
+        return CHOOSING_REPORT_PERIOD
+    # Sub-navigation: show month picker
+    if period == "pick_month":
+        await q.edit_message_text("📆 Chọn tháng:", reply_markup=_month_picker_keyboard("report_period"))
+        return CHOOSING_REPORT_PERIOD
+    # Sub-navigation: show year picker
+    if period == "pick_year":
+        await q.edit_message_text("🗓️ Chọn năm:", reply_markup=_year_picker_keyboard("report_period"))
+        return CHOOSING_REPORT_PERIOD
+    # Generate report
+    user_id = q.from_user.id
+    start_date, end_date, title_suffix = get_period_dates(period)
+    if title_suffix is None:
+        return CHOOSING_REPORT_PERIOD
+    loading = await q.edit_message_text("⏳ Đang tạo báo cáo...")
+    income,expense,balance = db_get_combined_summary(user_id, start_date, end_date)
+    incomes_g  = db_list_incomes_grouped(user_id, start_date, end_date)
+    expenses_g = db_list_expenses_grouped(user_id, start_date, end_date)
+    report = (f"📋 *BÁO CÁO {title_suffix.upper()}*\n{'='*30}\n\n"
+              f"💼 *TỔNG QUAN*\n"
+              f"┃ 📈 Thu nhập: `{income:,.0f} VND`\n"
+              f"┃ 📉 Chi tiêu: `{expense:,.0f} VND`\n"
+              f"┃ 💰 Số dư: `{balance:,.0f} VND`\n\n")
     if incomes_g:
-        report+="💵 *CHI TIẾT THU NHẬP*\n"
-        for i,(src,tot) in enumerate(incomes_g,1):
-            pct=(tot/income*100) if income>0 else 0
-            report+=f"{i}. **{src}**: `{tot:,.0f}` ({pct:.1f}%)\n"
-        report+="\n"
-    else: report+="⚠️ *Chưa có thu nhập trong kỳ*\n\n"
+        report += "💵 *CHI TIẾT THU NHẬP*\n"
+        for i,(src,tot) in enumerate(incomes_g, 1):
+            pct = (tot/income*100) if income>0 else 0
+            report += f"{i}. **{src}**: `{tot:,.0f}` ({pct:.1f}%)\n"
+        report += "\n"
+    else: report += "⚠️ *Chưa có thu nhập trong kỳ*\n\n"
     if expenses_g:
-        report+="💸 *CHI TIẾT CHI TIÊU*\n"
-        for i,(cat,tot) in enumerate(expenses_g,1):
-            pct=(tot/expense*100) if expense>0 else 0
-            report+=f"{i}. **{cat}**: `{tot:,.0f}` ({pct:.1f}%)\n"
-        report+="\n"
-    else: report+="✅ *Không có chi tiêu trong kỳ*\n\n"
-    budgets=db_get_budgets(user_id)
-    if period=="month" and budgets and expenses_g:
-        report+="⚠️ *NGÂN SÁCH*\n"
+        report += "💸 *CHI TIẾT CHI TIÊU*\n"
+        for i,(cat,tot) in enumerate(expenses_g, 1):
+            pct = (tot/expense*100) if expense>0 else 0
+            report += f"{i}. **{cat}**: `{tot:,.0f}` ({pct:.1f}%)\n"
+        report += "\n"
+    else: report += "✅ *Không có chi tiêu trong kỳ*\n\n"
+    budgets = db_get_budgets(user_id)
+    if (period in ("month",) or period.startswith("m_")) and budgets and expenses_g:
+        report += "⚠️ *NGÂN SÁCH*\n"
         for cat,tot in expenses_g:
-            lim=budgets.get(cat)
+            lim = budgets.get(cat)
             if not lim: continue
-            ratio=tot/lim if lim>0 else 0
-            if ratio>=1.0: report+=f"- {cat}: `{tot:,.0f}/{lim:,.0f}` 🚨 VƯỢT\n"
-            elif ratio>=0.9: report+=f"- {cat}: `{tot:,.0f}/{lim:,.0f}` ⚠️ GẦN\n"
-        report+="\n"
-    report+=("📊 *ĐÁNH GIÁ*: Tích cực! 🎉" if balance>0 else
-             "📊 *ĐÁNH GIÁ*: Cân bằng ⚖️" if balance==0 else
-             "📊 *ĐÁNH GIÁ*: Cần cân nhắc ⚠️")
+            ratio = tot/lim if lim>0 else 0
+            if ratio>=1.0: report += f"- {cat}: `{tot:,.0f}/{lim:,.0f}` 🚨 VƯỢT\n"
+            elif ratio>=0.9: report += f"- {cat}: `{tot:,.0f}/{lim:,.0f}` ⚠️ GẦN\n"
+        report += "\n"
+    report += ("📊 *ĐÁNH GIÁ*: Tích cực! 🎉" if balance>0 else
+               "📊 *ĐÁNH GIÁ*: Cân bằng ⚖️" if balance==0 else
+               "📊 *ĐÁNH GIÁ*: Cần cân nhắc ⚠️")
     await loading.delete()
-    await q.message.reply_text(report,parse_mode='Markdown')
-    return await end_conv(update,context,"✅ Báo cáo hoàn tất.")
+    await q.message.reply_text(report, parse_mode='Markdown')
+    return await end_conv(update, context, "✅ Báo cáo hoàn tất.")
 
 async def chart_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    kb=InlineKeyboardMarkup([
-        [InlineKeyboardButton("Theo tuần",callback_data="chart_period_week")],
-        [InlineKeyboardButton("Theo tháng",callback_data="chart_period_month")],
-        [InlineKeyboardButton("Theo năm",callback_data="chart_period_year")],
-        [InlineKeyboardButton("Toàn bộ",callback_data="chart_period_all")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]
-    ])
+    kb = _initial_period_keyboard("chart_period")
+    msg = "📊 Xem biểu đồ theo kỳ nào?"
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("Xem biểu đồ theo kỳ nào?",reply_markup=kb)
+        await update.callback_query.edit_message_text(msg, reply_markup=kb)
     else:
-        await update.message.reply_text("Xem biểu đồ theo kỳ nào?",reply_markup=kb)
+        await update.message.reply_text(msg, reply_markup=kb)
     return CHOOSING_CHART_PERIOD
 
 async def generate_charts_for_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
-    if q.data=="cancel_action": return await cancel_conversation_callback(update,context)
-    period=q.data.replace("chart_period_",""); user_id=q.from_user.id
-    _,_,title_suffix=get_period_dates(period)
-    msg=await q.edit_message_text(f"⏳ Đang tạo biểu đồ {title_suffix}...")
-    charts=await asyncio.to_thread(gen_finance_charts,user_id,period)
+    q = update.callback_query; await q.answer()
+    if q.data == "cancel_action":
+        return await cancel_conversation_callback(update, context)
+    period = q.data.replace("chart_period_", "")
+    # Sub-navigation: back to initial menu
+    if period == "back":
+        await q.edit_message_text("📊 Xem biểu đồ theo kỳ nào?",
+                                  reply_markup=_initial_period_keyboard("chart_period"))
+        return CHOOSING_CHART_PERIOD
+    # Sub-navigation: show month picker
+    if period == "pick_month":
+        await q.edit_message_text("📆 Chọn tháng:", reply_markup=_month_picker_keyboard("chart_period"))
+        return CHOOSING_CHART_PERIOD
+    # Sub-navigation: show year picker
+    if period == "pick_year":
+        await q.edit_message_text("🗓️ Chọn năm:", reply_markup=_year_picker_keyboard("chart_period"))
+        return CHOOSING_CHART_PERIOD
+    # Generate charts
+    user_id = q.from_user.id
+    _, _, title_suffix = get_period_dates(period)
+    if title_suffix is None:
+        return CHOOSING_CHART_PERIOD
+    msg = await q.edit_message_text(f"⏳ Đang tạo biểu đồ {title_suffix}...")
+    charts = await asyncio.to_thread(gen_finance_charts, user_id, period)
     if not charts:
         await msg.delete()
-        return await end_conv(update,context,f"Không có dữ liệu trong {title_suffix}.")
+        return await end_conv(update, context, f"Không có dữ liệu trong {title_suffix}.")
     await msg.delete()
     for buf,cap in charts:
         buf.seek(0)
-        await q.message.reply_photo(photo=buf,caption=cap)
-    return await end_conv(update,context,"✅ Biểu đồ hoàn tất.")
+        await q.message.reply_photo(photo=buf, caption=cap)
+    return await end_conv(update, context, "✅ Biểu đồ hoàn tất.")
 
 # ===================== EXPORT / IMPORT FINANCE FLOWS =====================
 async def export_file_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
