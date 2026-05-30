@@ -2063,20 +2063,17 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 def crypto_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
-        [KeyboardButton(BTN_PORTFOLIO), KeyboardButton(BTN_BUY)],
-        [KeyboardButton(BTN_SELL),      KeyboardButton(BTN_CHART)],
-        [KeyboardButton(BTN_REPORT),    KeyboardButton(BTN_MAP)],
-        [KeyboardButton(BTN_CIMPORT),   KeyboardButton(BTN_CEXPORT)],
-        [KeyboardButton(BTN_FDEL),      KeyboardButton(BTN_BACK)],
+        [KeyboardButton(BTN_PORTFOLIO), KeyboardButton(BTN_BUY),     KeyboardButton(BTN_SELL)],
+        [KeyboardButton(BTN_CHART),     KeyboardButton(BTN_REPORT),  KeyboardButton(BTN_MAP)],
+        [KeyboardButton(BTN_CIMPORT),   KeyboardButton(BTN_CEXPORT), KeyboardButton(BTN_FDEL)],
+        [KeyboardButton(BTN_BACK)],
     ], resize_keyboard=True)
 
 def finance_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
-        [KeyboardButton(BTN_FADD),      KeyboardButton(BTN_FDEL)],
-        [KeyboardButton(BTN_BUDGET),    KeyboardButton(BTN_RECURRING)],
-        [KeyboardButton(BTN_REPORT),    KeyboardButton(BTN_CHART)],
-        [KeyboardButton(BTN_FIMPORT),   KeyboardButton(BTN_FEXPORT)],
-        [KeyboardButton(BTN_BACK)],
+        [KeyboardButton(BTN_FADD),    KeyboardButton(BTN_FDEL),    KeyboardButton(BTN_BUDGET)],
+        [KeyboardButton(BTN_RECURRING), KeyboardButton(BTN_REPORT), KeyboardButton(BTN_CHART)],
+        [KeyboardButton(BTN_FIMPORT), KeyboardButton(BTN_FEXPORT), KeyboardButton(BTN_BACK)],
     ], resize_keyboard=True)
 
 def _submenu_keyboard(user_data: dict) -> ReplyKeyboardMarkup:
