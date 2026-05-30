@@ -504,6 +504,63 @@ def db_get_expenses_list(user_id: int, limit: int = 50):
         return []
 
 
+def db_get_incomes_filtered(user_id: int, date_from=None, date_to=None,
+                             category=None, search=None, limit: int = 500):
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        sql = "SELECT id,amount,COALESCE(source,''),COALESCE(note,''),created_at FROM incomes WHERE user_id=?"
+        params: list = [user_id]
+        if date_from:
+            sql += " AND created_at >= ?"; params.append(date_from)
+        if date_to:
+            sql += " AND created_at <= ?"; params.append(date_to + " 23:59:59")
+        if category:
+            sql += " AND LOWER(source) LIKE ?"; params.append(f"%{category.lower()}%")
+        if search:
+            sql += " AND (LOWER(note) LIKE ? OR LOWER(source) LIKE ?)"; params += [f"%{search.lower()}%", f"%{search.lower()}%"]
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        cur.execute(sql, params)
+        rows = cur.fetchall(); conn.close(); return rows
+    except Exception:
+        return []
+
+
+def db_get_expenses_filtered(user_id: int, date_from=None, date_to=None,
+                              category=None, search=None, limit: int = 500):
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        sql = "SELECT id,amount,COALESCE(category,''),COALESCE(note,''),created_at FROM expenses WHERE user_id=?"
+        params: list = [user_id]
+        if date_from:
+            sql += " AND created_at >= ?"; params.append(date_from)
+        if date_to:
+            sql += " AND created_at <= ?"; params.append(date_to + " 23:59:59")
+        if category:
+            sql += " AND LOWER(category) LIKE ?"; params.append(f"%{category.lower()}%")
+        if search:
+            sql += " AND (LOWER(note) LIKE ? OR LOWER(category) LIKE ?)"; params += [f"%{search.lower()}%", f"%{search.lower()}%"]
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        cur.execute(sql, params)
+        rows = cur.fetchall(); conn.close(); return rows
+    except Exception:
+        return []
+
+
+def db_get_finance_categories(user_id: int):
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        cur.execute("SELECT DISTINCT source FROM incomes WHERE user_id=? AND source IS NOT NULL AND source!='' ORDER BY source", (user_id,))
+        inc_cats = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT DISTINCT category FROM expenses WHERE user_id=? AND category IS NOT NULL AND category!='' ORDER BY category", (user_id,))
+        exp_cats = [r[0] for r in cur.fetchall()]
+        conn.close()
+        return {"income": inc_cats, "expense": exp_cats}
+    except Exception:
+        return {"income": [], "expense": []}
+
+
 # ── Recurring transactions DB ──────────────────────────
 
 def db_recurring_add(user_id, ttype, amount, category, note, day, month=None):
@@ -1337,84 +1394,8 @@ def _make_html(user_id=None) -> str:  # noqa: C901
         except Exception as ex:
             finance_html = f"<div class='card'><p style='color:#ff4757'>L&#x1ED7;i: {ex}</p></div>"
 
-        # ── Income list ──────────────────────────────
-        try:
-            income_list = db_get_incomes_list(user_id, 50)
-            inc_rows = ""
-            for row in income_list:
-                iid, amt, source, note, cat = row
-                dt = str(cat or "")[:10]
-                safe_src  = str(source or "").replace("'", "&#39;").replace('"', "&quot;")
-                safe_note = str(note or "").replace("'", "&#39;").replace('"', "&quot;")
-                inc_rows += (
-                    f"<tr>"
-                    f"<td>{dt}</td>"
-                    f"<td>{safe_src}</td>"
-                    f"<td>{safe_note}</td>"
-                    f"<td class='amount green'>{amt:,.0f} &#x111;</td>"
-                    f"<td style='white-space:nowrap'>"
-                    f"<button class='btn-sm' onclick=\"openEdit('income',{{id:{iid},amount:{amt},cat:'{safe_src}',note:'{safe_note}',date:'{dt}'}})\">&#x270F;&#xFE0F;</button> "
-                    f"<button class='btn-del' onclick=\"deleteFinance({iid},'income')\">&#x1F5D1;&#xFE0F;</button>"
-                    f"</td></tr>"
-                )
-        except Exception as ex:
-            inc_rows = f"<tr><td colspan='5' class='empty'>L&#x1ED7;i: {ex}</td></tr>"
-
-        income_list_html = f"""
-        <div class="card">
-          <div class="card-hdr">
-            <h2>&#x1F4B0; Thu Nh&#x1EAD;p G&#x1EA7;n &#x110;&#xE2;y</h2>
-            <div class="btns">
-              <button class="btn-pri" onclick="openAddFinance('income')">&#x2795; Th&#xEA;m</button>
-              <button class="btn-sec" onclick="exportData('finance','csv')">&#x2B07;&#xFE0F; CSV</button>
-              <button class="btn-sec" onclick="exportData('finance','excel')">&#x2B07;&#xFE0F; Excel</button>
-              <label class="btn-sec" style="cursor:pointer">&#x2B06;&#xFE0F; Nh&#x1EAD;p file
-                <input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('finance',this)">
-              </label>
-            </div>
-          </div>
-          <div style="overflow-x:auto">
-          <table><thead><tr><th>Ng&#xE0;y</th><th>Ngu&#x1ED3;n</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>Thao t&#xE1;c</th></tr></thead>
-          <tbody>{inc_rows or '<tr><td colspan="5" class="empty">Ch&#432;a c&#243; thu nh&#x1EAD;p</td></tr>'}</tbody></table>
-          </div>
-        </div>"""
-
-        # ── Expense list ─────────────────────────────
-        try:
-            expense_list = db_get_expenses_list(user_id, 50)
-            exp_rows = ""
-            for row in expense_list:
-                eid, amt, category, note, cat = row
-                dt = str(cat or "")[:10]
-                safe_cat  = str(category or "").replace("'", "&#39;").replace('"', "&quot;")
-                safe_note = str(note or "").replace("'", "&#39;").replace('"', "&quot;")
-                exp_rows += (
-                    f"<tr>"
-                    f"<td>{dt}</td>"
-                    f"<td>{safe_cat}</td>"
-                    f"<td>{safe_note}</td>"
-                    f"<td class='amount red'>{amt:,.0f} &#x111;</td>"
-                    f"<td style='white-space:nowrap'>"
-                    f"<button class='btn-sm' onclick=\"openEdit('expense',{{id:{eid},amount:{amt},cat:'{safe_cat}',note:'{safe_note}',date:'{dt}'}})\">&#x270F;&#xFE0F;</button> "
-                    f"<button class='btn-del' onclick=\"deleteFinance({eid},'expense')\">&#x1F5D1;&#xFE0F;</button>"
-                    f"</td></tr>"
-                )
-        except Exception as ex:
-            exp_rows = f"<tr><td colspan='5' class='empty'>L&#x1ED7;i: {ex}</td></tr>"
-
-        expense_list_html = f"""
-        <div class="card">
-          <div class="card-hdr">
-            <h2>&#x1F4B8; Chi Ti&#xEA;u G&#x1EA7;n &#x110;&#xE2;y</h2>
-            <div class="btns">
-              <button class="btn-pri" onclick="openAddFinance('expense')">&#x2795; Th&#xEA;m</button>
-            </div>
-          </div>
-          <div style="overflow-x:auto">
-          <table><thead><tr><th>Ng&#xE0;y</th><th>Danh m&#x1EE5;c</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>Thao t&#xE1;c</th></tr></thead>
-          <tbody>{exp_rows or '<tr><td colspan="5" class="empty">Ch&#432;a c&#243; chi ti&#xEA;u</td></tr>'}</tbody></table>
-          </div>
-        </div>"""
+        income_list_html = ""
+        expense_list_html = ""
 
     # ── Assemble HTML ────────────────────────────────
     return f"""<!DOCTYPE html>
@@ -1468,11 +1449,24 @@ footer{{text-align:center;color:#535c68;margin-top:20px;font-size:.78em;padding-
 label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
 .finput{{width:100%;margin-top:4px;background:#0f1730;color:#e8e8e8;border:1px solid #2a2a3e;padding:8px;border-radius:6px;font-size:.9em}}
 .finput:focus{{outline:none;border-color:#00d4ff}}
+.filter-bar{{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:14px;padding:14px;background:#0f1730;border-radius:8px;border:1px solid #2a2a3e}}
+.filter-bar .fgroup{{display:flex;flex-direction:column;gap:4px;min-width:110px}}
+.filter-bar .fgroup label{{margin:0;font-size:.78em;color:#94a3b8}}
+.filter-bar input,.filter-bar select{{background:#151932;color:#e8e8e8;border:1px solid #2a3a5e;padding:6px 8px;border-radius:5px;font-size:.84em}}
+.filter-bar input:focus,.filter-bar select:focus{{outline:none;border-color:#00d4ff}}
+.quick-btns{{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}}
+.qbtn{{background:#16213e;color:#94a3b8;border:1px solid #2a3a5e;padding:5px 12px;border-radius:20px;cursor:pointer;font-size:.82em;transition:all .15s}}
+.qbtn:hover,.qbtn.active{{background:#00d4ff;color:#0a0e27;border-color:#00d4ff;font-weight:600}}
+.tbl-footer{{display:flex;justify-content:space-between;align-items:center;padding:10px 0 0;border-top:1px solid #2a2a3e;margin-top:6px;font-size:.88em;color:#94a3b8}}
+.tbl-footer .total-val{{font-size:1em;font-weight:700}}
 @media(max-width:768px){{
   .two-col{{grid-template-columns:1fr}}
   .period-tabs{{grid-template-columns:1fr 1fr}}
   .chart-full{{height:220px}}
   .card-hdr{{flex-direction:column;align-items:flex-start;gap:10px}}
+  .filter-bar{{flex-direction:column}}
+  .filter-bar .fgroup{{width:100%}}
+  #financeTables{{grid-template-columns:1fr!important}}
 }}
 </style>
 </head>
@@ -1483,8 +1477,66 @@ label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
 {crypto_summary_html}
 {crypto_trades_html}
 {finance_html}
-{income_list_html}
-{expense_list_html}
+
+<!-- Finance filter + tables (dynamic) -->
+<div class="card" id="financeSection">
+  <div class="card-hdr">
+    <h2>&#x1F4CA; L&#x1ECD;c Thu Chi</h2>
+    <div class="btns">
+      <button class="btn-pri" onclick="openAddFinance('income')">&#x2795; Thu nh&#x1EAD;p</button>
+      <button class="btn-pri" style="background:#ff4757" onclick="openAddFinance('expense')">&#x2795; Chi ti&#xEA;u</button>
+      <button class="btn-sec" onclick="exportData('finance','csv')">&#x2B07;&#xFE0F; CSV</button>
+      <button class="btn-sec" onclick="exportData('finance','excel')">&#x2B07;&#xFE0F; Excel</button>
+      <label class="btn-sec" style="cursor:pointer">&#x2B06;&#xFE0F; Nh&#x1EAD;p file<input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('finance',this)"></label>
+    </div>
+  </div>
+
+  <div class="quick-btns">
+    <button class="qbtn" onclick="setQuick('thismonth')">Th&#xE1;ng n&#xE0;y</button>
+    <button class="qbtn" onclick="setQuick('lastmonth')">Th&#xE1;ng tr&#432;&#x1EDB;c</button>
+    <button class="qbtn" onclick="setQuick('thisquarter')">Qu&#xFD; n&#xE0;y</button>
+    <button class="qbtn" onclick="setQuick('thisyear')">N&#x103;m nay</button>
+    <button class="qbtn" onclick="setQuick('lastyear')">N&#x103;m ngo&#xE1;i</button>
+    <button class="qbtn" onclick="setQuick('all')">T&#x1EA5;t c&#x1EA3;</button>
+  </div>
+
+  <div class="filter-bar">
+    <div class="fgroup"><label>T&#x1EEB; ng&#xE0;y</label><input type="date" id="fDateFrom"></div>
+    <div class="fgroup"><label>&#x110;&#x1EBF;n ng&#xE0;y</label><input type="date" id="fDateTo"></div>
+    <div class="fgroup" style="min-width:150px"><label>Ngu&#x1ED3;n thu nh&#x1EAD;p</label>
+      <select id="fIncCat"><option value="">-- T&#x1EA5;t c&#x1EA3; --</option></select></div>
+    <div class="fgroup" style="min-width:150px"><label>Danh m&#x1EE5;c chi ti&#xEA;u</label>
+      <select id="fExpCat"><option value="">-- T&#x1EA5;t c&#x1EA3; --</option></select></div>
+    <div class="fgroup" style="min-width:160px"><label>T&#xEC;m ki&#x1EBF;m</label>
+      <input type="text" id="fSearch" placeholder="Ghi ch&#xFA;, ngu&#x1ED3;n..." onkeydown="if(event.key==='Enter')applyFilter()"></div>
+    <div class="fgroup" style="justify-content:flex-end;padding-top:16px">
+      <button class="btn-pri" onclick="applyFilter()" style="padding:6px 16px">&#x1F50D; L&#x1ECD;c</button>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px" id="financeTables">
+    <div>
+      <h3 class="sub-h">&#x1F4B0; Thu Nh&#x1EAD;p</h3>
+      <div style="overflow-x:auto">
+        <table><thead><tr><th>Ng&#xE0;y</th><th>Ngu&#x1ED3;n</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th></th></tr></thead>
+        <tbody id="incTbody"><tr><td colspan="5" class="empty">&#x26A1; &#x110;ang t&#x1EA3;i...</td></tr></tbody></table>
+      </div>
+      <div class="tbl-footer"><span id="incCount">0 kho&#x1EA3;n</span><span class="total-val green" id="incTotal">0 &#x111;</span></div>
+    </div>
+    <div>
+      <h3 class="sub-h">&#x1F4B8; Chi Ti&#xEA;u</h3>
+      <div style="overflow-x:auto">
+        <table><thead><tr><th>Ng&#xE0;y</th><th>Danh m&#x1EE5;c</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th></th></tr></thead>
+        <tbody id="expTbody"><tr><td colspan="5" class="empty">&#x26A1; &#x110;ang t&#x1EA3;i...</td></tr></tbody></table>
+      </div>
+      <div class="tbl-footer"><span id="expCount">0 kho&#x1EA3;n</span><span class="total-val red" id="expTotal">0 &#x111;</span></div>
+    </div>
+  </div>
+  <div class="tbl-footer" style="margin-top:14px;border-top:2px solid #00d4ff;padding-top:12px">
+    <span style="color:#e8e8e8;font-weight:600">C&#xE2;n &#x111;&#x1ED1;i</span>
+    <span class="total-val" id="netTotal" style="color:#00d4ff">0 &#x111;</span>
+  </div>
+</div>
 
 <footer>Univer All-in-One Bot &middot; Port {HTML_PORT}</footer>
 
@@ -1664,8 +1716,11 @@ async function submitModal(){{
         note:v('f_note'),date:v('f_date')
       }});
     }}
-    if(r.ok){{closeModal();location.reload();}}
-    else alert('Lỗi: '+(r.error||'unknown'));
+    if(r.ok){{
+      closeModal();
+      if(s.scope==='crypto'||s.scope==='crypto_edit') location.reload();
+      else applyFilter();
+    }}else alert('Lỗi: '+(r.error||'unknown'));
   }}catch(e){{alert('Lỗi: '+e);}}
 }}
 
@@ -1678,7 +1733,7 @@ async function deleteCrypto(id){{
 async function deleteFinance(id,ttype){{
   if(!confirm('X\xf3a giao dịch n\xe0y?')) return;
   const r=await api('/api/finance/delete',{{id,ttype}});
-  if(r.ok) location.reload(); else alert('Lỗi: '+r.error);
+  if(r.ok) applyFilter(); else alert('Lỗi: '+r.error);
 }}
 
 function v(id){{const el=document.getElementById(id);return el?el.value:'';}}
@@ -1686,6 +1741,123 @@ function v(id){{const el=document.getElementById(id);return el?el.value:'';}}
 document.getElementById('modal').addEventListener('click',function(e){{
   if(e.target===this) closeModal();
 }});
+
+// ── Finance filter ────────────────────────────────────
+const fmtVND=n=>n.toLocaleString('vi-VN')+'₫';
+
+function isoToday(){{return new Date().toISOString().slice(0,10);}}
+function isoDate(d){{return d.toISOString().slice(0,10);}}
+
+function setQuick(period){{
+  document.querySelectorAll('.qbtn').forEach(b=>b.classList.remove('active'));
+  event.target.classList.add('active');
+  const now=new Date();
+  let from,to;
+  if(period==='thismonth'){{
+    from=new Date(now.getFullYear(),now.getMonth(),1);
+    to=new Date(now.getFullYear(),now.getMonth()+1,0);
+  }}else if(period==='lastmonth'){{
+    from=new Date(now.getFullYear(),now.getMonth()-1,1);
+    to=new Date(now.getFullYear(),now.getMonth(),0);
+  }}else if(period==='thisquarter'){{
+    const q=Math.floor(now.getMonth()/3);
+    from=new Date(now.getFullYear(),q*3,1);
+    to=new Date(now.getFullYear(),q*3+3,0);
+  }}else if(period==='thisyear'){{
+    from=new Date(now.getFullYear(),0,1);
+    to=new Date(now.getFullYear(),11,31);
+  }}else if(period==='lastyear'){{
+    from=new Date(now.getFullYear()-1,0,1);
+    to=new Date(now.getFullYear()-1,11,31);
+  }}else{{
+    document.getElementById('fDateFrom').value='';
+    document.getElementById('fDateTo').value='';
+    applyFilter(); return;
+  }}
+  document.getElementById('fDateFrom').value=isoDate(from);
+  document.getElementById('fDateTo').value=isoDate(to);
+  applyFilter();
+}}
+
+async function loadCategories(){{
+  try{{
+    const r=await fetch(`/api/finance/categories?user_id=${{UID}}&token=${{TOK}}`);
+    const d=await r.json();
+    const incSel=document.getElementById('fIncCat');
+    const expSel=document.getElementById('fExpCat');
+    (d.income||[]).forEach(c=>{{const o=document.createElement('option');o.value=c;o.textContent=c;incSel.appendChild(o);}});
+    (d.expense||[]).forEach(c=>{{const o=document.createElement('option');o.value=c;o.textContent=c;expSel.appendChild(o);}});
+  }}catch(e){{}}
+}}
+
+async function applyFilter(){{
+  const from=v('fDateFrom');
+  const to=v('fDateTo');
+  const incCat=v('fIncCat');
+  const expCat=v('fExpCat');
+  const search=v('fSearch');
+
+  const qInc=new URLSearchParams({{user_id:UID,token:TOK,ttype:'income',date_from:from,date_to:to,category:incCat,search,limit:500}});
+  const qExp=new URLSearchParams({{user_id:UID,token:TOK,ttype:'expense',date_from:from,date_to:to,category:expCat,search,limit:500}});
+
+  document.getElementById('incTbody').innerHTML='<tr><td colspan="5" class="empty">Đang tải...</td></tr>';
+  document.getElementById('expTbody').innerHTML='<tr><td colspan="5" class="empty">Đang tải...</td></tr>';
+
+  const [rInc,rExp]=await Promise.all([
+    fetch(`/api/finance/list?${{qInc}}`).then(r=>r.json()),
+    fetch(`/api/finance/list?${{qExp}}`).then(r=>r.json())
+  ]);
+
+  renderTable('incTbody',rInc.income||[],'income');
+  renderTable('expTbody',rExp.expense||[],'expense');
+
+  const incT=rInc.income_total||0;
+  const expT=rExp.expense_total||0;
+  const net=incT-expT;
+  document.getElementById('incCount').textContent=(rInc.income||[]).length+' khoản';
+  document.getElementById('expCount').textContent=(rExp.expense||[]).length+' khoản';
+  document.getElementById('incTotal').textContent=fmtVND(incT);
+  document.getElementById('expTotal').textContent=fmtVND(expT);
+  const netEl=document.getElementById('netTotal');
+  netEl.textContent=(net>=0?'+':'')+fmtVND(net);
+  netEl.style.color=net>=0?'#00ff88':'#ff4757';
+}}
+
+function renderTable(tbodyId,rows,ttype){{
+  const tb=document.getElementById(tbodyId);
+  if(!rows.length){{tb.innerHTML='<tr><td colspan="5" class="empty">Không có dữ liệu</td></tr>';return;}}
+  const colorCls=ttype==='income'?'green':'red';
+  tb.innerHTML=rows.map(r=>{{
+    const safeC=(r.cat||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;");
+    const safeN=(r.note||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;");
+    return `<tr>
+      <td>${{r.date}}</td>
+      <td>${{safeC}}</td>
+      <td>${{safeN}}</td>
+      <td class="amount ${{colorCls}}">${{r.amount.toLocaleString('vi-VN')}} ₫</td>
+      <td style="white-space:nowrap">
+        <button class="btn-sm" onclick="openEdit('${{ttype}}',{{id:${{r.id}},amount:${{r.amount}},cat:'${{safeC}}',note:'${{safeN}}',date:'${{r.date}}'}})">✏️</button>
+        <button class="btn-del" onclick="deleteFinanceR(${{r.id}},'${{ttype}}')">🗑️</button>
+      </td></tr>`;
+  }}).join('');
+}}
+
+async function deleteFinanceR(id,ttype){{
+  if(!confirm('Xóa giao dịch này?')) return;
+  const r=await api('/api/finance/delete',{{id,ttype}});
+  if(r.ok) applyFilter(); else alert('Lỗi: '+r.error);
+}}
+
+// init
+loadCategories();
+// default: this month
+(function(){{
+  const now=new Date();
+  document.getElementById('fDateFrom').value=isoDate(new Date(now.getFullYear(),now.getMonth(),1));
+  document.getElementById('fDateTo').value=isoDate(new Date(now.getFullYear(),now.getMonth()+1,0));
+  document.querySelector('.qbtn').classList.add('active');
+  applyFilter();
+}})();
 </script>
 </body>
 </html>"""
@@ -1740,6 +1912,10 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         uid = self._uid(qs)
         if parsed.path == "/api/export":
             self._handle_export(uid, qs); return
+        if parsed.path == "/api/finance/list":
+            self._api_finance_list(uid, qs); return
+        if parsed.path == "/api/finance/categories":
+            self._send_json(db_get_finance_categories(uid) if uid else {"income":[],"expense":[]}); return
         html = _make_html(uid).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1779,6 +1955,28 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "unknown path"}, 404)
         except Exception as exc:
             self._send_json({"error": str(exc), "trace": traceback.format_exc()}, 500)
+
+    # ── finance list (filterable) ─────────────────────
+
+    def _api_finance_list(self, uid, qs):
+        if not uid:
+            self._send_json({"error": "no user_id"}); return
+        ttype     = qs.get("ttype",     ["all"])[0]
+        date_from = qs.get("date_from", [""])[0].strip() or None
+        date_to   = qs.get("date_to",   [""])[0].strip() or None
+        category  = qs.get("category",  [""])[0].strip() or None
+        search    = qs.get("search",    [""])[0].strip() or None
+        limit     = int(qs.get("limit", ["500"])[0])
+        result = {}
+        if ttype in ("income", "all"):
+            rows = db_get_incomes_filtered(uid, date_from, date_to, category if ttype=="income" else None, search, limit)
+            result["income"] = [{"id":r[0],"amount":r[1],"cat":r[2],"note":r[3],"date":str(r[4])[:10]} for r in rows]
+            result["income_total"] = sum(r[1] for r in rows)
+        if ttype in ("expense", "all"):
+            rows = db_get_expenses_filtered(uid, date_from, date_to, category if ttype=="expense" else None, search, limit)
+            result["expense"] = [{"id":r[0],"amount":r[1],"cat":r[2],"note":r[3],"date":str(r[4])[:10]} for r in rows]
+            result["expense_total"] = sum(r[1] for r in rows)
+        self._send_json(result)
 
     # ── export ─────────────────────────────────────────
 
