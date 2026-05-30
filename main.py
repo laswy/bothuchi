@@ -8,7 +8,7 @@ Univer All-in-One Bot
 """
 from __future__ import annotations
 
-import os, io, csv, sqlite3, datetime, tempfile, asyncio, traceback, re, threading, logging
+import os, io, csv, sqlite3, datetime, tempfile, asyncio, traceback, re, threading, logging, json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
 
@@ -968,71 +968,277 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
     return charts
 
 # ===================== HTML DASHBOARD =====================
-def _make_html(user_id: Optional[int] = None) -> str:
-    crypto_rows = ""
-    finance_html = ""
-    crypto_total = 0.0
+def _make_html(user_id: Optional[int] = None) -> str:  # noqa: C901
+    now = datetime.datetime.now()
+    ts  = now.strftime("%d/%m/%Y %H:%M:%S")
+    uid_note = f"User ID: {user_id}" if user_id else "Thêm ?user_id=ID vào URL để xem dữ liệu"
+
+    def _month_range(y, m):
+        s = datetime.datetime(y, m, 1)
+        e = ((s.replace(day=28)+datetime.timedelta(days=4))-datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
+        return s, e
+
+    cur_y, cur_m = now.year, now.month
+    tm_s, tm_e = _month_range(cur_y, cur_m)
+    lm_m = cur_m - 1 or 12
+    lm_y = cur_y if cur_m > 1 else cur_y - 1
+    lm_s, lm_e = _month_range(lm_y, lm_m)
+    ty_s = datetime.datetime(cur_y, 1, 1)
+    ty_e = datetime.datetime(cur_y, 12, 31, 23, 59, 59)
+
+    crypto_html = finance_html = ""
+    charts_json = "{}"
+
     if user_id:
+        # ── Crypto ──────────────────────────────────────────────────────
         try:
             positions = db_crypto_positions(user_id)
             cg_ids = [p["cg_id"] for p in positions if p["cg_id"]]
-            prices = cg_simple_price_usd(cg_ids) if cg_ids else {}
+            prices  = cg_simple_price_usd(cg_ids) if cg_ids else {}
+            crypto_total = 0.0; crow = ""
             for p in positions:
                 sym=p["symbol"]; qty=float(p["qty"]); inv=float(p["invested_usd"])
-                cg=p["cg_id"] or ""; price=float(prices.get(cg,0))
+                price=float(prices.get(p["cg_id"] or "",0))
                 val=qty*price; pnl=val-inv; pct=(pnl/inv*100) if inv>0 else 0
                 crypto_total+=val
-                color="#00ff88" if pnl>=0 else "#ff4757"
-                crypto_rows+=f"<tr><td>{sym}</td><td>{qty:g}</td><td>${price:,.2f}</td><td>${val:,.2f}</td><td>${inv:,.2f}</td><td style='color:{color}'>${pnl:+,.2f} ({pct:+.1f}%)</td></tr>"
-        except Exception as e:
-            crypto_rows = f"<tr><td colspan='6'>Lỗi: {e}</td></tr>"
+                c="#00ff88" if pnl>=0 else "#ff4757"
+                crow+=f"<tr><td>{sym}</td><td>{qty:g}</td><td>${price:,.2f}</td><td>${val:,.2f}</td><td>${inv:,.2f}</td><td style='color:{c}'>${pnl:+,.2f} ({pct:+.1f}%)</td></tr>"
+        except Exception as ex:
+            crow=f"<tr><td colspan='6' class='empty'>Lỗi: {ex}</td></tr>"; crypto_total=0
+        crypto_html = f"""
+        <div class="card">
+          <h2>🪙 Danh Mục Crypto</h2>
+          <table><thead><tr><th>Token</th><th>SL</th><th>Giá</th><th>Giá trị</th><th>Vốn</th><th>Lãi/Lỗ</th></tr></thead>
+          <tbody>{crow or '<tr><td colspan="6" class="empty">Chưa có dữ liệu</td></tr>'}</tbody></table>
+          <p class="total">Tổng portfolio: <b>${crypto_total:,.2f} USD</b></p>
+        </div>"""
+
+        # ── Finance ─────────────────────────────────────────────────────
         try:
-            income, expense, balance = db_get_combined_summary(user_id)
-            bal_color="#00ff88" if balance>=0 else "#ff4757"
+            all_i,all_e,all_b = db_get_combined_summary(user_id)
+            tm_i,tm_e_,tm_b   = db_get_combined_summary(user_id, tm_s, tm_e)
+            lm_i,lm_e_,lm_b   = db_get_combined_summary(user_id, lm_s, lm_e)
+            ty_i,ty_e_,ty_b   = db_get_combined_summary(user_id, ty_s, ty_e)
+
+            tm_ig = db_list_incomes_grouped(user_id, tm_s, tm_e)
+            tm_eg = db_list_expenses_grouped(user_id, tm_s, tm_e)
+            lm_eg = db_list_expenses_grouped(user_id, lm_s, lm_e)
+            budgets = db_get_budgets(user_id)
+            recent  = db_get_last_n_transactions(user_id, 20)
+
+            # 13-month trend
+            tl, ti, te = [], [], []
+            for i in range(12, -1, -1):
+                m = cur_m - i; y = cur_y
+                while m <= 0: m += 12; y -= 1
+                s, e = _month_range(y, m)
+                inc, exp, _ = db_get_combined_summary(user_id, s, e)
+                tl.append(f"{m:02d}/{y}"); ti.append(round(inc)); te.append(round(exp))
+
+            charts_json = json.dumps({
+                "trend":     {"labels": tl, "income": ti, "expense": te},
+                "exp_donut": {"labels": [r[0] for r in tm_eg], "values": [round(r[1]) for r in tm_eg]},
+                "inc_donut": {"labels": [r[0] for r in tm_ig], "values": [round(r[1]) for r in tm_ig]},
+            })
+
+            # Budget bars
+            bhtml = ""
+            if budgets:
+                bhtml = f"<div class='card'><h2>🎯 Ngân Sách Tháng {cur_m:02d}/{cur_y}</h2>"
+                for cat, lim in budgets.items():
+                    spent = next((r[1] for r in tm_eg if r[0]==cat), 0)
+                    pct2  = min(spent/lim*100, 100) if lim>0 else 0
+                    bc    = "#ff4757" if pct2>=100 else "#ffa502" if pct2>=80 else "#00ff88"
+                    bhtml += f"""
+                    <div class="budget-row">
+                      <div class="budget-label"><span>{cat}</span>
+                        <span class="{'red' if pct2>=100 else ''}">{spent:,.0f} / {lim:,.0f} đ ({pct2:.0f}%)</span>
+                      </div>
+                      <div class="budget-bar"><div class="budget-fill" style="width:{pct2:.1f}%;background:{bc}"></div></div>
+                    </div>"""
+                bhtml += "</div>"
+
+            def _pct(v, total): return f"{v/total*100:.1f}%" if total>0 else "–"
+            def _inc_rows(groups, total):
+                if not groups: return "<tr><td colspan='3' class='empty'>Chưa có thu nhập</td></tr>"
+                return "".join(f"<tr><td>{r[0]}</td><td class='amount green'>{r[1]:,.0f} đ</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
+            def _exp_rows(groups, total):
+                if not groups: return "<tr><td colspan='3' class='empty'>Chưa có chi tiêu</td></tr>"
+                return "".join(f"<tr><td>{r[0]}</td><td class='amount red'>{r[1]:,.0f} đ</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
+
+            tx_rows = ""
+            for tx in recent:
+                _, ttype, amt, note, cat, created = tx
+                sign="+" if ttype=="income" else "-"
+                cls ="green" if ttype=="income" else "red"
+                icon="📈" if ttype=="income" else "📉"
+                dt  = (created or "")[:10]
+                tx_rows += f"<tr><td>{dt}</td><td>{icon} {cat}</td><td>{note or '–'}</td><td class='amount {cls}'>{sign}{amt:,.0f} đ</td></tr>"
+
+            def _bc(v): return "#00ff88" if v>=0 else "#ff4757"
+
             finance_html = f"""
             <div class="card">
-              <h2>💵 Tài Chính Cá Nhân</h2>
-              <div class="stats">
-                <div class="stat green">📈 Thu nhập<br><b>{income:,.0f} đ</b></div>
-                <div class="stat red">📉 Chi tiêu<br><b>{expense:,.0f} đ</b></div>
-                <div class="stat" style="color:{bal_color}">💰 Số dư<br><b>{balance:,.0f} đ</b></div>
+              <h2>💵 Tổng Quan Tài Chính</h2>
+              <div class="period-tabs">
+                <div class="period-card">
+                  <div class="period-label">📅 Tháng {cur_m:02d}/{cur_y}</div>
+                  <div class="prow green">Thu: {tm_i:,.0f} đ</div>
+                  <div class="prow red">Chi: {tm_e_:,.0f} đ</div>
+                  <div class="prow" style="color:{_bc(tm_b)}"><b>Dư: {tm_b:,.0f} đ</b></div>
+                </div>
+                <div class="period-card">
+                  <div class="period-label">⬅️ Tháng {lm_m:02d}/{lm_y}</div>
+                  <div class="prow green">Thu: {lm_i:,.0f} đ</div>
+                  <div class="prow red">Chi: {lm_e_:,.0f} đ</div>
+                  <div class="prow" style="color:{_bc(lm_b)}"><b>Dư: {lm_b:,.0f} đ</b></div>
+                </div>
+                <div class="period-card">
+                  <div class="period-label">🗓️ Năm {cur_y}</div>
+                  <div class="prow green">Thu: {ty_i:,.0f} đ</div>
+                  <div class="prow red">Chi: {ty_e_:,.0f} đ</div>
+                  <div class="prow" style="color:{_bc(ty_b)}"><b>Dư: {ty_b:,.0f} đ</b></div>
+                </div>
+                <div class="period-card">
+                  <div class="period-label">⏰ Tất cả</div>
+                  <div class="prow green">Thu: {all_i:,.0f} đ</div>
+                  <div class="prow red">Chi: {all_e:,.0f} đ</div>
+                  <div class="prow" style="color:{_bc(all_b)}"><b>Dư: {all_b:,.0f} đ</b></div>
+                </div>
               </div>
+            </div>
+
+            {bhtml}
+
+            <div class="card">
+              <h2>📅 Tháng {cur_m:02d}/{cur_y} — Thu Chi Theo Danh Mục</h2>
+              <div class="two-col">
+                <div>
+                  <h3 class="sub-h">💵 Thu nhập theo nguồn</h3>
+                  <table><thead><tr><th>Nguồn</th><th>Số tiền</th><th>%</th></tr></thead>
+                  <tbody>{_inc_rows(tm_ig, tm_i)}</tbody></table>
+                </div>
+                <div>
+                  <h3 class="sub-h">💸 Chi tiêu theo danh mục</h3>
+                  <table><thead><tr><th>Danh mục</th><th>Số tiền</th><th>%</th></tr></thead>
+                  <tbody>{_exp_rows(tm_eg, tm_e_)}</tbody></table>
+                </div>
+              </div>
+              <div class="two-col chart-row">
+                <div><canvas id="incDonut"></canvas></div>
+                <div><canvas id="expDonut"></canvas></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>⬅️ Tháng {lm_m:02d}/{lm_y} — Chi Tiêu Theo Danh Mục</h2>
+              <table><thead><tr><th>Danh mục</th><th>Số tiền</th><th>%</th></tr></thead>
+              <tbody>{_exp_rows(lm_eg, lm_e_)}</tbody></table>
+            </div>
+
+            <div class="card">
+              <h2>📈 Xu Hướng Thu Chi — 13 Tháng Gần Nhất</h2>
+              <div class="chart-full"><canvas id="trendChart"></canvas></div>
+            </div>
+
+            <div class="card">
+              <h2>🕐 Giao Dịch Gần Đây (20 giao dịch)</h2>
+              <table><thead><tr><th>Ngày</th><th>Danh mục</th><th>Ghi chú</th><th>Số tiền</th></tr></thead>
+              <tbody>{tx_rows or "<tr><td colspan='4' class='empty'>Chưa có giao dịch</td></tr>"}</tbody></table>
             </div>"""
-        except Exception as e:
-            finance_html = f"<div class='card'><p>Lỗi finance: {e}</p></div>"
-    ts = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    uid_note = f"User ID: {user_id}" if user_id else "Thêm ?user_id=ID vào URL để xem dữ liệu"
-    return f"""<!DOCTYPE html><html lang="vi"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+
+        except Exception as ex:
+            finance_html = f"<div class='card'><p style='color:#ff4757'>Lỗi: {ex}</p></div>"
+
+    return f"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Univer Bot Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#0a0e27;color:#e8e8e8;font-family:'Segoe UI',sans-serif;padding:20px}}
-h1{{color:#00d4ff;text-align:center;margin-bottom:8px;font-size:1.8em}}
-.subtitle{{text-align:center;color:#94a3b8;margin-bottom:24px;font-size:.9em}}
+body{{background:#0a0e27;color:#e8e8e8;font-family:'Segoe UI',sans-serif;padding:20px;max-width:1400px;margin:0 auto}}
+h1{{color:#00d4ff;text-align:center;margin-bottom:6px;font-size:1.8em}}
+.subtitle{{text-align:center;color:#94a3b8;margin-bottom:24px;font-size:.85em}}
 .card{{background:#151932;border-radius:12px;padding:20px;margin-bottom:20px;border:1px solid #2a2a3e}}
-.card h2{{color:#00d4ff;margin-bottom:16px;font-size:1.2em}}
-table{{width:100%;border-collapse:collapse;font-size:.9em}}
-th{{background:#16213e;color:#00d4ff;padding:10px 8px;text-align:left}}
-td{{padding:8px;border-bottom:1px solid #2a2a3e}}
-tr:hover td{{background:#1e2a4a}}
-.stats{{display:flex;gap:16px;flex-wrap:wrap}}
-.stat{{flex:1;min-width:120px;background:#0f3460;border-radius:8px;padding:14px;text-align:center;font-size:.95em}}
-.stat.green{{color:#00ff88}}.stat.red{{color:#ff4757}}
-.total{{color:#00d4ff;font-weight:bold;margin-top:12px;font-size:1em}}
-footer{{text-align:center;color:#535c68;margin-top:20px;font-size:.8em}}
-</style></head><body>
+.card h2{{color:#00d4ff;margin-bottom:16px;font-size:1.15em;border-bottom:1px solid #2a2a3e;padding-bottom:10px}}
+h3.sub-h{{color:#94a3b8;font-size:.88em;margin-bottom:8px;font-weight:500;text-transform:uppercase;letter-spacing:.04em}}
+table{{width:100%;border-collapse:collapse;font-size:.88em}}
+th{{background:#16213e;color:#00d4ff;padding:9px 10px;text-align:left;font-weight:500}}
+td{{padding:8px 10px;border-bottom:1px solid #1e2a3e}}
+tr:last-child td{{border-bottom:none}}
+tr:hover td{{background:#1a2240}}
+.amount{{text-align:right;font-family:'Courier New',monospace;font-weight:600}}
+.green{{color:#00ff88}}.red{{color:#ff4757}}
+.empty{{color:#535c68;text-align:center;padding:16px;font-style:italic}}
+.total{{color:#00d4ff;font-weight:bold;margin-top:12px;font-size:.95em}}
+.period-tabs{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}}
+.period-card{{background:#0f3460;border-radius:10px;padding:14px}}
+.period-label{{color:#94a3b8;font-size:.78em;margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}}
+.prow{{font-size:.88em;margin:4px 0}}
+.two-col{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+.chart-row{{margin-top:24px}}
+.chart-row canvas{{max-height:260px}}
+.chart-full{{height:300px;position:relative}}
+.budget-row{{margin:10px 0}}
+.budget-label{{display:flex;justify-content:space-between;font-size:.84em;margin-bottom:5px;color:#b0b8cc}}
+.budget-bar{{background:#1e2a3e;border-radius:6px;height:10px;overflow:hidden}}
+.budget-fill{{height:100%;border-radius:6px}}
+footer{{text-align:center;color:#535c68;margin-top:20px;font-size:.78em;padding-bottom:16px}}
+@media(max-width:768px){{
+  .two-col{{grid-template-columns:1fr}}
+  .period-tabs{{grid-template-columns:1fr 1fr}}
+  .chart-full{{height:220px}}
+}}
+</style>
+</head>
+<body>
 <h1>🤖 Univer Bot Dashboard</h1>
 <div class="subtitle">{uid_note} · Cập nhật: {ts}</div>
-<div class="card">
-  <h2>🪙 Danh Mục Crypto</h2>
-  <table><thead><tr><th>Token</th><th>Số lượng</th><th>Giá</th><th>Giá trị</th><th>Vốn</th><th>Lãi/Lỗ</th></tr></thead>
-  <tbody>{crypto_rows if crypto_rows else '<tr><td colspan="6" style="color:#94a3b8">Chưa có dữ liệu</td></tr>'}</tbody></table>
-  <p class="total">Tổng: ${crypto_total:,.2f} USD</p>
-</div>
+{crypto_html}
 {finance_html}
 <footer>Univer All-in-One Bot · Port {HTML_PORT}</footer>
-</body></html>"""
+<script>
+const D={charts_json};
+const PAL=['#00d4ff','#00ff88','#ffa502','#ff4757','#a29bfe','#fd79a8','#55efc4','#fdcb6e','#e17055','#74b9ff','#b2bec3','#fab1a0'];
+const fmtK=v=>v>=1e9?(v/1e9).toFixed(1)+'B':v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':v;
+if(D.trend){{
+  new Chart(document.getElementById('trendChart'),{{
+    type:'bar',
+    data:{{labels:D.trend.labels,datasets:[
+      {{label:'Thu nhập',data:D.trend.income,backgroundColor:'rgba(0,255,136,.65)',borderColor:'#00ff88',borderWidth:1,borderRadius:4}},
+      {{label:'Chi tiêu',data:D.trend.expense,backgroundColor:'rgba(255,71,87,.65)',borderColor:'#ff4757',borderWidth:1,borderRadius:4}},
+    ]}},
+    options:{{responsive:true,maintainAspectRatio:false,
+      plugins:{{legend:{{labels:{{color:'#e8e8e8',font:{{size:12}}}}}}}},
+      scales:{{
+        x:{{ticks:{{color:'#94a3b8',font:{{size:11}}}},grid:{{color:'#1a2240'}}}},
+        y:{{ticks:{{color:'#94a3b8',font:{{size:11}},callback:fmtK}},grid:{{color:'#1a2240'}}}}
+      }}
+    }}
+  }});
+}}
+function donut(id,title,data){{
+  const el=document.getElementById(id); if(!el||!data||!data.labels.length) return;
+  new Chart(el,{{
+    type:'doughnut',
+    data:{{labels:data.labels,datasets:[{{data:data.values,backgroundColor:PAL,borderWidth:0,hoverOffset:6}}]}},
+    options:{{responsive:true,maintainAspectRatio:false,
+      plugins:{{
+        legend:{{position:'bottom',labels:{{color:'#e8e8e8',font:{{size:11}},padding:10}}}},
+        title:{{display:true,text:title,color:'#94a3b8',font:{{size:12}}}}
+      }}
+    }}
+  }});
+}}
+donut('incDonut','Thu nhập theo nguồn',D.inc_donut);
+donut('expDonut','Chi tiêu theo danh mục',D.exp_donut);
+</script>
+</body>
+</html>"""
+
 
 class _DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
