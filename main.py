@@ -1315,10 +1315,22 @@ async def cp_import_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===================== CRYPTO COMMAND HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_migrated()
+    uid = update.effective_user.id
     await update.message.reply_text(
-        "👋 Chào mừng! Bot quản lý *Crypto* + *Thu Chi* tài chính.\n"
-        "Dùng bàn phím bên dưới hoặc gõ /help để xem hướng dẫn.",
+        "👋 Chào mừng! Bot quản lý *Crypto* + *Thu Chi* tài chính.\n\n"
+        f"🪪 Telegram ID của bạn: `{uid}`\n"
+        f"🌐 HTML Dashboard: `http://localhost:{HTML_PORT}?user_id={uid}`\n\n"
+        "Dùng bàn phím bên dưới hoặc /help để xem hướng dẫn.",
         parse_mode="Markdown", reply_markup=main_menu_keyboard())
+
+async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    await update.message.reply_text(
+        f"🌐 *HTML Dashboard*\n\n"
+        f"🪪 Telegram ID: `{uid}`\n"
+        f"🔗 Link: `http://localhost:{HTML_PORT}?user_id={uid}`\n\n"
+        "Nếu bot chạy trên máy khác, thay `localhost` bằng IP của máy đó.",
+        parse_mode="Markdown")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -2183,6 +2195,7 @@ def build_app() -> "Application":
     # Commands
     app.add_handler(CommandHandler("start",start))
     app.add_handler(CommandHandler("help",help_cmd))
+    app.add_handler(CommandHandler("dashboard",dashboard_cmd))
     app.add_handler(CommandHandler("cp",cp_cmd))
     app.add_handler(CommandHandler("cp_add",cp_add))
     app.add_handler(CommandHandler("cp_sell",cp_sell))
