@@ -1010,32 +1010,75 @@ def start_html_server():
     return server
 
 # ===================== KEYBOARDS =====================
-BTN_PORTFOLIO = "📋 Danh mục"
+# ─── Home ───────────────────────────────────────────────────────────────
+BTN_HOME_CRYPTO  = "📈 Crypto"
+BTN_HOME_FINANCE = "💰 Thu Chi"
+BTN_BACK         = "🔙 Trang Chủ"
+
+# ─── Crypto submenu ─────────────────────────────────────────────────────
+BTN_PORTFOLIO = "📊 Danh Mục"
 BTN_BUY       = "➕ Mua"
 BTN_SELL      = "➖ Bán"
-BTN_THEME     = "🎨 Theme"
-BTN_FADD      = "💰 Thêm"
-BTN_FDEL      = "🗑️ Xóa"
-BTN_REPORT    = "📈 Báo Cáo"
-BTN_CHART     = "📊 Biểu Đồ"
-BTN_MAP       = "🔗 Map token"
-BTN_CIMPORT   = "⬇️ Nhập Crypto"
-BTN_CEXPORT   = "⬆️ Xuất Crypto"
-BTN_HELP      = "❓ Hướng Dẫn"
-BTN_FIMPORT   = "📥 Nhập File"
-BTN_FEXPORT   = "📤 Xuất File"
+BTN_MAP       = "🔗 Map Token"
+BTN_CIMPORT   = "⬇️ Nhập"
+BTN_CEXPORT   = "⬆️ Xuất"
 
-ALL_MENU_BTNS = {BTN_PORTFOLIO,BTN_BUY,BTN_SELL,BTN_THEME,BTN_FADD,BTN_FDEL,
-                 BTN_REPORT,BTN_CHART,BTN_MAP,BTN_CIMPORT,BTN_CEXPORT,
-                 BTN_HELP,BTN_FIMPORT,BTN_FEXPORT}
+# ─── Finance submenu ────────────────────────────────────────────────────
+BTN_FADD    = "💵 Thêm"
+BTN_FDEL    = "🗑️ Xóa"
+BTN_BUDGET  = "🎯 Ngân Sách"
+BTN_FIMPORT = "⬇️ Nhập File"
+BTN_FEXPORT = "⬆️ Xuất File"
+
+# ─── Shared (route by user_data['submenu']) ──────────────────────────────
+BTN_CHART  = "📈 Biểu Đồ"
+BTN_REPORT = "📋 Báo Cáo"
+
+ALL_MENU_BTNS = {
+    BTN_HOME_CRYPTO, BTN_HOME_FINANCE, BTN_BACK,
+    BTN_PORTFOLIO, BTN_BUY, BTN_SELL, BTN_MAP, BTN_CIMPORT, BTN_CEXPORT,
+    BTN_FADD, BTN_FDEL, BTN_BUDGET, BTN_FIMPORT, BTN_FEXPORT,
+    BTN_CHART, BTN_REPORT,
+}
+
+def home_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([
+        [KeyboardButton(BTN_HOME_CRYPTO)],
+        [KeyboardButton(BTN_HOME_FINANCE)],
+    ], resize_keyboard=True)
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    return home_keyboard()
+
+def crypto_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
-        [KeyboardButton(BTN_PORTFOLIO),KeyboardButton(BTN_BUY),KeyboardButton(BTN_SELL),KeyboardButton(BTN_THEME)],
-        [KeyboardButton(BTN_FADD),KeyboardButton(BTN_FDEL),KeyboardButton(BTN_REPORT),KeyboardButton(BTN_CHART)],
-        [KeyboardButton(BTN_MAP),KeyboardButton(BTN_CIMPORT),KeyboardButton(BTN_CEXPORT),KeyboardButton(BTN_HELP)],
-        [KeyboardButton(BTN_FIMPORT),KeyboardButton(BTN_FEXPORT)],
-    ], resize_keyboard=True, is_persistent=True)
+        [KeyboardButton(BTN_PORTFOLIO), KeyboardButton(BTN_BUY)],
+        [KeyboardButton(BTN_SELL),      KeyboardButton(BTN_CHART)],
+        [KeyboardButton(BTN_REPORT),    KeyboardButton(BTN_MAP)],
+        [KeyboardButton(BTN_CIMPORT),   KeyboardButton(BTN_CEXPORT)],
+        [KeyboardButton(BTN_BACK)],
+    ], resize_keyboard=True)
+
+def finance_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([
+        [KeyboardButton(BTN_FADD),    KeyboardButton(BTN_FDEL)],
+        [KeyboardButton(BTN_BUDGET)],
+        [KeyboardButton(BTN_REPORT),  KeyboardButton(BTN_CHART)],
+        [KeyboardButton(BTN_FIMPORT), KeyboardButton(BTN_FEXPORT)],
+        [KeyboardButton(BTN_BACK)],
+    ], resize_keyboard=True)
+
+def _submenu_keyboard(user_data: dict) -> ReplyKeyboardMarkup:
+    submenu = user_data.get('submenu')
+    if submenu == 'finance': return finance_menu_keyboard()
+    if submenu == 'crypto':  return crypto_menu_keyboard()
+    return home_keyboard()
+
+def _clear_keep_submenu(user_data: dict) -> None:
+    submenu = user_data.get('submenu')
+    user_data.clear()
+    if submenu: user_data['submenu'] = submenu
+
 
 # ===================== CRYPTO HELPERS =====================
 def _build_positions_and_prices(user_id: int):
@@ -1235,26 +1278,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📖 *HƯỚNG DẪN NHANH*\n\n"
-        "*🪙 CRYPTO*\n"
-        "• 📋 Danh mục → xem portfolio\n"
+        "*📈 CRYPTO* (bấm 📈 Crypto)\n"
+        "• 📊 Danh Mục → xem portfolio\n"
         "• ➕ Mua / ➖ Bán → hướng dẫn lệnh\n"
+        "• 📈 Biểu Đồ → biểu đồ portfolio\n"
+        "• 📋 Báo Cáo → tóm tắt portfolio\n"
         "• `mua BTC 0.01 giá 70k` → ghi ngay\n"
-        "• `bán SOL tất cả giá 100`\n"
         "• `/cp_add SYMBOL SL GIA [note]`\n"
-        "• `/cp_sell SYMBOL SL GIA [note]`\n"
-        "• `/cp_map SYMBOL CG_ID`\n\n"
-        "*💵 TÀI CHÍNH*\n"
-        "• 💰 Thêm → thêm thu/chi\n"
+        "• `/cp_sell SYMBOL SL GIA [note]`\n\n"
+        "*💰 THU CHI* (bấm 💰 Thu Chi)\n"
+        "• 💵 Thêm → thêm thu/chi\n"
         "• 🗑️ Xóa → xóa giao dịch\n"
-        "• 📈 Báo Cáo → xem báo cáo\n"
-        "• 📊 Biểu Đồ → xem biểu đồ\n"
-        "• Nhập nhanh: `20k ăn sáng` hoặc `+500k lương`\n"
-        "• `/ngansach Ăn uống 3tr` → đặt ngân sách\n"
-        "• `/xem_ngansach` → xem ngân sách\n\n"
+        "• 📋 Báo Cáo → báo cáo kỳ\n"
+        "• 📈 Biểu Đồ → biểu đồ thu chi\n"
+        "• 🎯 Ngân Sách → đặt/xem ngân sách\n"
+        "• Nhập nhanh: `20k ăn sáng` hoặc `+500k lương`\n\n"
         "*🌐 HTML Dashboard*\n"
         f"• Truy cập: `http://IP:{HTML_PORT}?user_id=YOUR_ID`"
     )
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu_keyboard())
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=_submenu_keyboard(context.user_data))
 
 async def cp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await check_rate(update): return
@@ -1310,10 +1352,6 @@ async def handle_crypto_menu_btns(update: Update, context: ContextTypes.DEFAULT_
     if text==BTN_PORTFOLIO:
         try: await send_portfolio_images(update.effective_chat.id,user_id,context)
         except Exception as e: await update.message.reply_text(f"Chưa có dữ liệu.\nLỗi: {e}")
-    elif text==BTN_THEME:
-        current=db_get_theme(user_id)
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"{'✅ ' if k==current else ''}{v['name']}",callback_data=f"SET_THEME:{k}") for k,v in THEMES.items()]])
-        await update.message.reply_text("🎨 Chọn theme:",reply_markup=kb)
     elif text==BTN_BUY:
         await update.message.reply_text("➕ *MUA*: `/cp_add SYMBOL SL GIA [note]`\nVD: `/cp_add BTC 0.01 70000`\nHoặc gõ: `mua BTC 0.01 giá 70k`",parse_mode="Markdown")
     elif text==BTN_SELL:
@@ -1345,8 +1383,60 @@ async def handle_crypto_menu_btns(update: Update, context: ContextTypes.DEFAULT_
         finally:
             try: os.remove(path)
             except Exception: pass
-    elif text==BTN_HELP:
-        await help_cmd(update,context)
+
+# ===================== 2-LEVEL MENU NAVIGATION =====================
+async def handle_home_crypto_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['submenu'] = 'crypto'
+    await update.message.reply_text("📈 *Crypto*:", parse_mode="Markdown", reply_markup=crypto_menu_keyboard())
+
+async def handle_home_finance_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['submenu'] = 'finance'
+    await update.message.reply_text("💰 *Thu Chi*:", parse_mode="Markdown", reply_markup=finance_menu_keyboard())
+
+async def handle_back_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop('submenu', None)
+    await update.message.reply_text("Menu chính:", reply_markup=home_keyboard())
+
+async def handle_budget_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎯 Đặt ngân sách", callback_data="budget_menu_set")],
+        [InlineKeyboardButton("📋 Xem ngân sách",  callback_data="budget_menu_view")],
+        [InlineKeyboardButton("❌ Hủy",            callback_data="cancel_action")],
+    ])
+    await update.message.reply_text("🎯 *Ngân Sách*:", parse_mode="Markdown", reply_markup=kb)
+
+async def handle_budget_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    if q.data == "budget_menu_set":
+        await q.edit_message_text(
+            "📝 Dùng lệnh:\n`/ngansach <Danh mục> <Số tiền>`\nVD: `/ngansach Ăn uống 3000000`",
+            parse_mode="Markdown")
+    elif q.data == "budget_menu_view":
+        budgets = db_get_budgets(q.from_user.id)
+        if not budgets:
+            await q.edit_message_text("Chưa có ngân sách nào. Dùng /ngansach để đặt.")
+            return
+        lines = ["🎯 *Ngân Sách Hiện Tại:*"]
+        for cat, amt in budgets.items():
+            lines.append(f"• {cat}: `{amt:,.0f} đ`")
+        await q.edit_message_text("\n".join(lines), parse_mode="Markdown")
+
+async def handle_shared_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Routes 📈 Biểu Đồ and 📋 Báo Cáo based on user_data['submenu']."""
+    submenu = context.user_data.get('submenu', 'finance')
+    text = (update.message.text or "").strip()
+    if submenu == 'crypto':
+        if text == BTN_CHART:
+            try: await send_portfolio_images(update.effective_chat.id, update.effective_user.id, context)
+            except Exception as e: await update.message.reply_text(f"Chưa có dữ liệu.\nLỗi: {e}")
+        elif text == BTN_REPORT:
+            await cp_cmd(update, context)
+    else:
+        if text == BTN_CHART:
+            await chart_start(update, context)
+        elif text == BTN_REPORT:
+            await report_start(update, context)
+
 # ===================== FINANCE CONVERSATION STATES =====================
 CHOOSING_INCOME_AMOUNT, CHOOSING_INCOME_NOTE, CHOOSING_INCOME_DATE, CHOOSING_INCOME_SOURCE, CONFIRM_INCOME_AMOUNT = range(5)
 CHOOSING_EXPENSE_AMOUNT, CHOOSING_EXPENSE_NOTE, CHOOSING_EXPENSE_DATE, CHOOSING_EXPENSE_CATEGORY, CONFIRM_EXPENSE_AMOUNT = range(5,10)
@@ -1376,14 +1466,15 @@ async def post_to_channel(context: ContextTypes.DEFAULT_TYPE, message: str):
         logger.error(f"Không đăng được lên kênh: {e}")
 
 async def send_or_update_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, message_text: str = "Menu chính:"):
+    kbd = _submenu_keyboard(context.user_data)
     if update.callback_query:
-        try: await update.callback_query.edit_message_text(message_text,reply_markup=main_menu_keyboard())
-        except Exception: await update.callback_query.message.reply_text(message_text,reply_markup=main_menu_keyboard())
+        try: await update.callback_query.edit_message_text(message_text,reply_markup=kbd)
+        except Exception: await update.callback_query.message.reply_text(message_text,reply_markup=kbd)
     elif update.message:
-        await update.message.reply_text(message_text,reply_markup=main_menu_keyboard())
+        await update.message.reply_text(message_text,reply_markup=kbd)
 
 async def end_conv(update: Update, context: ContextTypes.DEFAULT_TYPE, msg: str) -> int:
-    context.user_data.clear()
+    _clear_keep_submenu(context.user_data)
     await send_or_update_main_menu(update,context,msg)
     return ConversationHandler.END
 
@@ -1395,7 +1486,7 @@ async def cancel_conversation_callback(update: Update, context: ContextTypes.DEF
 
 # ===================== ADD FINANCE FLOW =====================
 async def handle_add_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
+    _clear_keep_submenu(context.user_data)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("Thu nhập (Hôm nay)",callback_data="add_type_income_today")],
         [InlineKeyboardButton("Chi tiêu (Hôm nay)",callback_data="add_type_expense_today")],
@@ -1590,7 +1681,7 @@ async def get_expense_category(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # ===================== DELETE FLOW =====================
 async def handle_delete_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
+    _clear_keep_submenu(context.user_data)
     kb=InlineKeyboardMarkup([[InlineKeyboardButton("Xóa giao dịch",callback_data="delete_action_individual")],
         [InlineKeyboardButton("Đặt lại toàn bộ",callback_data="delete_action_reset_all")],
         [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
@@ -1657,7 +1748,7 @@ async def reset_data_confirmation_2_handler(update: Update, context: ContextType
 
 # ===================== REPORT & CHART FLOWS =====================
 async def report_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
+    _clear_keep_submenu(context.user_data)
     kb=InlineKeyboardMarkup([
         [InlineKeyboardButton("📅 Theo tuần",callback_data="report_period_week")],
         [InlineKeyboardButton("📆 Theo tháng",callback_data="report_period_month")],
@@ -1719,7 +1810,7 @@ async def generate_report_for_period(update: Update, context: ContextTypes.DEFAU
     return await end_conv(update,context,"✅ Báo cáo hoàn tất.")
 
 async def chart_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
+    _clear_keep_submenu(context.user_data)
     kb=InlineKeyboardMarkup([
         [InlineKeyboardButton("Theo tuần",callback_data="chart_period_week")],
         [InlineKeyboardButton("Theo tháng",callback_data="chart_period_month")],
@@ -1752,7 +1843,7 @@ async def generate_charts_for_period(update: Update, context: ContextTypes.DEFAU
 
 # ===================== EXPORT / IMPORT FINANCE FLOWS =====================
 async def export_file_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
+    _clear_keep_submenu(context.user_data)
     user_id=update.effective_user.id
     rows=db_export_data(user_id)
     if not rows:
@@ -1796,7 +1887,7 @@ async def handle_export_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     return await end_conv(update,context,"✅ Xuất file hoàn tất.")
 
 async def import_file_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
+    _clear_keep_submenu(context.user_data)
     msg=("📥 *NHẬP DỮ LIỆU TÀI CHÍNH*\n\n"
          "File cần có 5 cột:\n`Loại` | `Số tiền` | `Ghi chú` | `Danh mục/Nguồn` | `Ngày`\n\n"
          "Ví dụ:\n`Chi tiêu | 50000 | Ăn trưa | Ăn uống | 2024-07-28`\n\n"
@@ -1952,7 +2043,7 @@ def build_app() -> "Application":
     # Finance ConversationHandlers (register FIRST for priority)
     add_conv=ConversationHandler(
         entry_points=[CommandHandler("them",handle_add_button),
-                      MessageHandler(filters.Regex("^💰 Thêm$"),handle_add_button)],
+                      MessageHandler(filters.Regex(f"^{re.escape(BTN_FADD)}$"),handle_add_button)],
         states={
             CHOOSING_ADD_TYPE:[CallbackQueryHandler(choose_add_type_callback,pattern="^add_type_")],
             CHOOSING_SUPPLEMENT_TYPE:[CallbackQueryHandler(choose_supplement_type_callback,pattern="^supplement_type_")],
@@ -1974,7 +2065,7 @@ def build_app() -> "Application":
     )
     delete_conv=ConversationHandler(
         entry_points=[CommandHandler("xoa",handle_delete_button),
-                      MessageHandler(filters.Regex("^🗑️ Xóa$"),handle_delete_button)],
+                      MessageHandler(filters.Regex(f"^{re.escape(BTN_FDEL)}$"),handle_delete_button)],
         states={
             DELETE_CHOOSING_ACTION:[CallbackQueryHandler(choose_delete_action,pattern="^delete_action_")],
             DELETE_INDIVIDUAL_LISTING:[CallbackQueryHandler(delete_choose_item,pattern="^delete_id_")],
@@ -1986,29 +2077,27 @@ def build_app() -> "Application":
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     report_conv=ConversationHandler(
-        entry_points=[CommandHandler("baocao",report_start),
-                      MessageHandler(filters.Regex("^📈 Báo Cáo$"),report_start)],
+        entry_points=[CommandHandler("baocao",report_start)],
         states={CHOOSING_REPORT_PERIOD:[CallbackQueryHandler(generate_report_for_period,pattern="^report_period_|^cancel_action$")]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     chart_conv=ConversationHandler(
-        entry_points=[CommandHandler("bieudo",chart_start),
-                      MessageHandler(filters.Regex("^📊 Biểu Đồ$"),chart_start)],
+        entry_points=[CommandHandler("bieudo",chart_start)],
         states={CHOOSING_CHART_PERIOD:[CallbackQueryHandler(generate_charts_for_period,pattern="^chart_period_|^cancel_action$")]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     export_conv=ConversationHandler(
         entry_points=[CommandHandler("xuatfile",export_file_start),
-                      MessageHandler(filters.Regex("^📤 Xuất File$"),export_file_start)],
+                      MessageHandler(filters.Regex(f"^{re.escape(BTN_FEXPORT)}$"),export_file_start)],
         states={EXPORT_CHOOSING_FORMAT:[CallbackQueryHandler(handle_export_choice,pattern="^export_|^cancel_action$")]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     import_conv=ConversationHandler(
         entry_points=[CommandHandler("nhapfile",import_file_start),
-                      MessageHandler(filters.Regex("^📥 Nhập File$"),import_file_start)],
+                      MessageHandler(filters.Regex(f"^{re.escape(BTN_FIMPORT)}$"),import_file_start)],
         states={IMPORT_FILE_UPLOADED:[MessageHandler(filters.Document.ALL,handle_import_file_upload)]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
@@ -2034,15 +2123,29 @@ def build_app() -> "Application":
     app.add_handler(CommandHandler("xoa_ngansach",budget_delete_cmd))
     app.add_handler(CommandHandler("cancel",cancel_conversation))
 
-    # Crypto menu buttons (not covered by ConversationHandlers)
-    crypto_btn_pattern=f"^({'|'.join(re.escape(b) for b in [BTN_PORTFOLIO,BTN_BUY,BTN_SELL,BTN_THEME,BTN_MAP,BTN_CIMPORT,BTN_CEXPORT,BTN_HELP])})$"
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(crypto_btn_pattern),handle_crypto_menu_btns))
+    # Home navigation buttons
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_HOME_CRYPTO)}$"), handle_home_crypto_btn))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_HOME_FINANCE)}$"), handle_home_finance_btn))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_BACK)}$"), handle_back_btn))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_BUDGET)}$"), handle_budget_btn))
 
-    # Theme callback
-    app.add_handler(CallbackQueryHandler(theme_select_cb,pattern="^SET_THEME:"))
+    # Shared chart/report buttons (routed by submenu state)
+    shared_btn_pattern = f"^({'|'.join(re.escape(b) for b in [BTN_CHART, BTN_REPORT])})$"
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(shared_btn_pattern), handle_shared_btn))
+
+    # Crypto menu buttons
+    crypto_btn_pattern = f"^({'|'.join(re.escape(b) for b in [BTN_PORTFOLIO,BTN_BUY,BTN_SELL,BTN_MAP,BTN_CIMPORT,BTN_CEXPORT])})$"
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(crypto_btn_pattern), handle_crypto_menu_btns))
+
+    # Callbacks
+    app.add_handler(CallbackQueryHandler(theme_select_cb,         pattern="^SET_THEME:"))
+    app.add_handler(CallbackQueryHandler(handle_budget_menu_callback, pattern="^budget_menu_"))
+    # Global fallbacks for chart/report when triggered via handle_shared_btn (outside ConvHandler)
+    app.add_handler(CallbackQueryHandler(generate_charts_for_period,  pattern="^chart_period_"))
+    app.add_handler(CallbackQueryHandler(generate_report_for_period,  pattern="^report_period_"))
 
     # Unified catch-all (natural trade + finance NLP)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,unified_text_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unified_text_handler))
 
     app.add_error_handler(error_handler)
     return app
