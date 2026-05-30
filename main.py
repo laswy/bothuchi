@@ -626,8 +626,13 @@ def guess_date(text: str):
     return datetime.datetime.now()
 
 def clean_note(text: str) -> str:
-    note = re.sub(r'\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?\s*(k|tr|triệu|nghìn|ngàn)?', '', text, flags=re.IGNORECASE)
-    return note.strip(" -–—,.;:") or "Không ghi chú"
+    # Remove "ngày DD/MM/YYYY" then bare date patterns before stripping numbers
+    # (otherwise the numbers are removed first and bare slashes like "//" remain)
+    note = re.sub(r'ngày\s+\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?', '', text, flags=re.IGNORECASE)
+    note = re.sub(r'\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?', '', note)
+    note = re.sub(r'\d{1,3}(?:[.,]\d{3})+\s*đ?|\d+(?:[.,]\d+)?\s*(k|tr|triệu|nghìn|ngàn|đ)?', '', note, flags=re.IGNORECASE)
+    note = re.sub(r'\s+', ' ', note)
+    return note.strip(" -–—,.;:/") or "Không ghi chú"
 
 def nlp_parse_transaction(raw: str):
     amount = parse_amount_loose(raw)
