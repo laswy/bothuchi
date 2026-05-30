@@ -3588,13 +3588,18 @@ async def check_recurring_job(context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     start_html_server()
     app = build_app()
-    # Schedule daily recurring check at 08:00
-    import datetime as _dt
+    # Schedule daily recurring check at 08:00 local time (UTC+7 Vietnam)
     job_queue = app.job_queue
     if job_queue is not None:
-        trigger_time = _dt.time(hour=8, minute=0, tzinfo=None)
+        try:
+            import pytz
+            tz = pytz.timezone("Asia/Ho_Chi_Minh")
+        except ImportError:
+            tz = datetime.timezone(datetime.timedelta(hours=7))
+        trigger_time = datetime.time(hour=8, minute=0, tzinfo=tz)
         job_queue.run_daily(check_recurring_job, time=trigger_time, name="recurring_daily")
-        # Also run once on startup to catch any missed triggers from today
         job_queue.run_once(check_recurring_job, when=5, name="recurring_startup")
+    else:
+        logger.warning("JobQueue không khả dụng — cài lại: pip install 'python-telegram-bot[job-queue]'")
     logger.info(f"Bot đang chạy... HTML dashboard port {HTML_PORT}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

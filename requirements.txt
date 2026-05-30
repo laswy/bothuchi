@@ -1,6 +1,7 @@
-python-telegram-bot==21.*
+python-telegram-bot[job-queue]==21.*
 matplotlib
 numpy
 requests
 python-dotenv
 openpyxl
+pytz
