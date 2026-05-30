@@ -9,13 +9,16 @@ VENV="$DIR/.venv"
 if [ ! -d "$VENV" ]; then
     echo "Tạo virtual environment..."
     python3 -m venv "$VENV"
+    echo "Nâng cấp pip..."
+    "$VENV/bin/python" -m ensurepip --upgrade 2>/dev/null || true
+    "$VENV/bin/python" -m pip install --upgrade pip --quiet
 fi
 
 # Kích hoạt venv
 source "$VENV/bin/activate"
 
 # Cài / cập nhật thư viện (bỏ qua cache để tránh lỗi deserialization)
-pip install -q --no-cache-dir -r "$DIR/requirements.txt"
+python -m pip install -q --no-cache-dir -r "$DIR/requirements.txt"
 
 # Tạo .env nếu chưa có
 if [ ! -f "$DIR/.env" ]; then
