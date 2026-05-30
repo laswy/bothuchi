@@ -406,6 +406,90 @@ def db_sum_expense_by_category_in_period(user_id: int, category: str,
         (user_id, category, start_date.isoformat(), end_date.isoformat()))
     val = cur.fetchone()[0] or 0.0; conn.close()
     return float(val)
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
+
+# ── SECTION 1: DB HELPERS ──────────────────────────────
+
+def db_crypto_get_trades(user_id: int):
+    """Return list of tuples (id,symbol,cg_id,side,qty,price_usd,fee_usd,note,created_at) DESC."""
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT id,symbol,COALESCE(cg_id,''),side,qty,price_usd,
+                   COALESCE(fee_usd,0),COALESCE(note,''),created_at
+            FROM crypto_trades WHERE user_id=?
+            ORDER BY created_at DESC LIMIT 50
+        """, (user_id,))
+        rows = cur.fetchall(); conn.close(); return rows
+    except Exception:
+        return []
+
+
+def db_crypto_delete_trade(trade_id: int):
+    """DELETE FROM crypto_trades WHERE id=?"""
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM crypto_trades WHERE id=?", (trade_id,))
+    conn.commit(); conn.close()
+
+
+def db_crypto_update_trade(trade_id: int, qty: float, price: float, fee: float, note: str):
+    """UPDATE crypto_trades SET qty,price_usd,fee_usd,note WHERE id=?"""
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""
+        UPDATE crypto_trades SET qty=?,price_usd=?,fee_usd=?,note=? WHERE id=?
+    """, (qty, price, fee, note, trade_id))
+    conn.commit(); conn.close()
+
+
+def db_update_income(income_id: int, amount: float, source: str, note: str, date_str: str):
+    """UPDATE incomes SET amount,source,note,created_at WHERE id=?"""
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""
+        UPDATE incomes SET amount=?,source=?,note=?,created_at=? WHERE id=?
+    """, (amount, source, note, date_str, income_id))
+    conn.commit(); conn.close()
+
+
+def db_update_expense(expense_id: int, amount: float, category: str, note: str, date_str: str):
+    """UPDATE expenses SET amount,category,note,created_at WHERE id=?"""
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""
+        UPDATE expenses SET amount=?,category=?,note=?,created_at=? WHERE id=?
+    """, (amount, category, note, date_str, expense_id))
+    conn.commit(); conn.close()
+
+
+def db_get_incomes_list(user_id: int, limit: int = 50):
+    """Return list of (id,amount,source,note,created_at) ORDER BY created_at DESC."""
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT id,amount,COALESCE(source,''),COALESCE(note,''),created_at
+            FROM incomes WHERE user_id=?
+            ORDER BY created_at DESC LIMIT ?
+        """, (user_id, limit))
+        rows = cur.fetchall(); conn.close(); return rows
+    except Exception:
+        return []
+
+
+def db_get_expenses_list(user_id: int, limit: int = 50):
+    """Return list of (id,amount,category,note,created_at) ORDER BY created_at DESC."""
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT id,amount,COALESCE(category,''),COALESCE(note,''),created_at
+            FROM expenses WHERE user_id=?
+            ORDER BY created_at DESC LIMIT ?
+        """, (user_id, limit))
+        rows = cur.fetchall(); conn.close(); return rows
+    except Exception:
+        return []
+
+
+# ── SECTION 2: _DashboardHandler ───────────────────────
+
 # ===================== NLP PARSERS (Vietnamese) =====================
 VIET_NUM = {
     "k": 1000, "nghin": 1000, "nghìn": 1000, "ngan": 1000, "ngàn": 1000,
@@ -969,14 +1053,14 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
     return charts
 
 # ===================== HTML DASHBOARD =====================
-def _make_html(user_id: Optional[int] = None) -> str:  # noqa: C901
+def _make_html(user_id=None) -> str:  # noqa: C901
     now = datetime.datetime.now()
     ts  = now.strftime("%d/%m/%Y %H:%M:%S")
     uid_note = f"User ID: {user_id}" if user_id else "Thêm ?user_id=ID vào URL để xem dữ liệu"
 
     def _month_range(y, m):
         s = datetime.datetime(y, m, 1)
-        e = ((s.replace(day=28)+datetime.timedelta(days=4))-datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
+        e = ((s.replace(day=28) + datetime.timedelta(days=4)) - datetime.timedelta(days=1)).replace(hour=23, minute=59, second=59)
         return s, e
 
     cur_y, cur_m = now.year, now.month
@@ -987,45 +1071,98 @@ def _make_html(user_id: Optional[int] = None) -> str:  # noqa: C901
     ty_s = datetime.datetime(cur_y, 1, 1)
     ty_e = datetime.datetime(cur_y, 12, 31, 23, 59, 59)
 
-    crypto_html = finance_html = ""
+    crypto_summary_html = crypto_trades_html = ""
+    finance_html = income_list_html = expense_list_html = ""
+    bhtml = ""
     charts_json = "{}"
 
     if user_id:
-        # ── Crypto ──────────────────────────────────────────────────────
+        # ── Crypto summary ───────────────────────────
         try:
             positions = db_crypto_positions(user_id)
-            cg_ids = [p["cg_id"] for p in positions if p["cg_id"]]
-            prices  = cg_simple_price_usd(cg_ids) if cg_ids else {}
-            crypto_total = 0.0; crow = ""
+            cg_ids    = [p["cg_id"] for p in positions if p["cg_id"]]
+            prices    = cg_simple_price_usd(cg_ids) if cg_ids else {}
+            crypto_total = 0.0
+            crow = ""
             for p in positions:
-                sym=p["symbol"]; qty=float(p["qty"]); inv=float(p["invested_usd"])
-                price=float(prices.get(p["cg_id"] or "",0))
-                val=qty*price; pnl=val-inv; pct=(pnl/inv*100) if inv>0 else 0
-                crypto_total+=val
-                c="#00ff88" if pnl>=0 else "#ff4757"
-                crow+=f"<tr><td>{sym}</td><td>{qty:g}</td><td>${price:,.2f}</td><td>${val:,.2f}</td><td>${inv:,.2f}</td><td style='color:{c}'>${pnl:+,.2f} ({pct:+.1f}%)</td></tr>"
+                sym  = p["symbol"]; qty = float(p["qty"]); inv = float(p["invested_usd"])
+                price= float(prices.get(p["cg_id"] or "", 0))
+                val  = qty * price; pnl = val - inv
+                pct  = (pnl / inv * 100) if inv > 0 else 0
+                crypto_total += val
+                c = "#00ff88" if pnl >= 0 else "#ff4757"
+                crow += (f"<tr><td>{sym}</td><td>{qty:g}</td><td>${price:,.2f}</td>"
+                         f"<td>${val:,.2f}</td><td>${inv:,.2f}</td>"
+                         f"<td style='color:{c}'>${pnl:+,.2f} ({pct:+.1f}%)</td></tr>")
         except Exception as ex:
-            crow=f"<tr><td colspan='6' class='empty'>Lỗi: {ex}</td></tr>"; crypto_total=0
-        crypto_html = f"""
+            crow = f"<tr><td colspan='6' class='empty'>Lỗi: {ex}</td></tr>"; crypto_total = 0
+
+        crypto_summary_html = f"""
         <div class="card">
-          <h2>🪙 Danh Mục Crypto</h2>
-          <table><thead><tr><th>Token</th><th>SL</th><th>Giá</th><th>Giá trị</th><th>Vốn</th><th>Lãi/Lỗ</th></tr></thead>
-          <tbody>{crow or '<tr><td colspan="6" class="empty">Chưa có dữ liệu</td></tr>'}</tbody></table>
-          <p class="total">Tổng portfolio: <b>${crypto_total:,.2f} USD</b></p>
+          <div class="card-hdr">
+            <h2>&#x1FA99; Danh M&#x1EE5;c Crypto</h2>
+          </div>
+          <table><thead><tr><th>Token</th><th>SL</th><th>Gi&#xE1;</th><th>Gi&#xE1; tr&#x1ECB;</th><th>V&#x1ED1;n</th><th>L&#xE3;i/L&#x1ED7;</th></tr></thead>
+          <tbody>{crow or '<tr><td colspan="6" class="empty">Ch&#432;a c&#243; d&#7919;u li&#7879;u</td></tr>'}</tbody></table>
+          <p class="total">T&#x1ED5;ng portfolio: <b>${crypto_total:,.2f} USD</b></p>
         </div>"""
 
-        # ── Finance ─────────────────────────────────────────────────────
+        # ── Crypto trades list ───────────────────────
         try:
-            all_i,all_e,all_b = db_get_combined_summary(user_id)
-            tm_i,tm_e_,tm_b   = db_get_combined_summary(user_id, tm_s, tm_e)
-            lm_i,lm_e_,lm_b   = db_get_combined_summary(user_id, lm_s, lm_e)
-            ty_i,ty_e_,ty_b   = db_get_combined_summary(user_id, ty_s, ty_e)
+            crypto_trades = db_crypto_get_trades(user_id)
+            ct_rows = ""
+            for t in crypto_trades:
+                tid, sym, cg, side, qty, price, fee, note, cat = t
+                dt = str(cat or "")[:10]
+                side_cls = "green" if side == "BUY" else "red"
+                safe_note = str(note or "").replace("'", "&#39;").replace('"', "&quot;")
+                ct_rows += (
+                    f"<tr>"
+                    f"<td>{dt}</td>"
+                    f"<td><b>{sym}</b></td>"
+                    f"<td class='{side_cls}'>{side}</td>"
+                    f"<td>{qty:g}</td>"
+                    f"<td>${price:,.4f}</td>"
+                    f"<td>${fee:,.4f}</td>"
+                    f"<td>{safe_note}</td>"
+                    f"<td style='white-space:nowrap'>"
+                    f"<button class='btn-sm' onclick=\"openEdit('crypto',{{id:{tid},qty:{qty},price:{price},fee:{fee},note:'{safe_note}'}})\">&#x270F;&#xFE0F;</button> "
+                    f"<button class='btn-del' onclick='deleteCrypto({tid})'>&#x1F5D1;&#xFE0F;</button>"
+                    f"</td></tr>"
+                )
+        except Exception as ex:
+            ct_rows = f"<tr><td colspan='8' class='empty'>L&#x1ED7;i: {ex}</td></tr>"
+
+        crypto_trades_html = f"""
+        <div class="card">
+          <div class="card-hdr">
+            <h2>&#x1F4CB; L&#x1ECB;ch S&#x1EED; Giao D&#x1ECB;ch Crypto</h2>
+            <div class="btns">
+              <button class="btn-pri" onclick="openAddCrypto()">&#x2795; Th&#xEA;m</button>
+              <button class="btn-sec" onclick="exportData('crypto','csv')">&#x2B07;&#xFE0F; CSV</button>
+              <button class="btn-sec" onclick="exportData('crypto','excel')">&#x2B07;&#xFE0F; Excel</button>
+              <label class="btn-sec" style="cursor:pointer">&#x2B06;&#xFE0F; Nh&#x1EAD;p file
+                <input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('crypto',this)">
+              </label>
+            </div>
+          </div>
+          <div style="overflow-x:auto">
+          <table><thead><tr><th>Ng&#xE0;y</th><th>Symbol</th><th>Lo&#x1EA1;i</th><th>SL</th><th>Gi&#xE1;</th><th>Ph&#xED;</th><th>Ghi ch&#xFA;</th><th>Thao t&#xE1;c</th></tr></thead>
+          <tbody>{ct_rows or '<tr><td colspan="8" class="empty">Ch&#432;a c&#243; giao d&#x1ECB;ch</td></tr>'}</tbody></table>
+          </div>
+        </div>"""
+
+        # ── Finance overview ─────────────────────────
+        try:
+            all_i,  all_e,  all_b  = db_get_combined_summary(user_id)
+            tm_i,   tm_e_,  tm_b   = db_get_combined_summary(user_id, tm_s, tm_e)
+            lm_i,   lm_e_,  lm_b   = db_get_combined_summary(user_id, lm_s, lm_e)
+            ty_i,   ty_e_,  ty_b   = db_get_combined_summary(user_id, ty_s, ty_e)
 
             tm_ig = db_list_incomes_grouped(user_id, tm_s, tm_e)
             tm_eg = db_list_expenses_grouped(user_id, tm_s, tm_e)
             lm_eg = db_list_expenses_grouped(user_id, lm_s, lm_e)
             budgets = db_get_budgets(user_id)
-            recent  = db_get_last_n_transactions(user_id, 20)
 
             # 13-month trend
             tl, ti, te = [], [], []
@@ -1033,8 +1170,8 @@ def _make_html(user_id: Optional[int] = None) -> str:  # noqa: C901
                 m = cur_m - i; y = cur_y
                 while m <= 0: m += 12; y -= 1
                 s, e = _month_range(y, m)
-                inc, exp, _ = db_get_combined_summary(user_id, s, e)
-                tl.append(f"{m:02d}/{y}"); ti.append(round(inc)); te.append(round(exp))
+                inc_, exp_, _ = db_get_combined_summary(user_id, s, e)
+                tl.append(f"{m:02d}/{y}"); ti.append(round(inc_)); te.append(round(exp_))
 
             charts_json = json.dumps({
                 "trend":     {"labels": tl, "income": ti, "expense": te},
@@ -1042,69 +1179,58 @@ def _make_html(user_id: Optional[int] = None) -> str:  # noqa: C901
                 "inc_donut": {"labels": [r[0] for r in tm_ig], "values": [round(r[1]) for r in tm_ig]},
             })
 
-            # Budget bars
-            bhtml = ""
             if budgets:
-                bhtml = f"<div class='card'><h2>🎯 Ngân Sách Tháng {cur_m:02d}/{cur_y}</h2>"
+                bhtml = f"<div class='card'><h2>&#x1F3AF; Ng&#xE2;n S&#xE1;ch Th&#xE1;ng {cur_m:02d}/{cur_y}</h2>"
                 for cat, lim in budgets.items():
-                    spent = next((r[1] for r in tm_eg if r[0]==cat), 0)
-                    pct2  = min(spent/lim*100, 100) if lim>0 else 0
-                    bc    = "#ff4757" if pct2>=100 else "#ffa502" if pct2>=80 else "#00ff88"
-                    bhtml += f"""
-                    <div class="budget-row">
-                      <div class="budget-label"><span>{cat}</span>
-                        <span class="{'red' if pct2>=100 else ''}">{spent:,.0f} / {lim:,.0f} đ ({pct2:.0f}%)</span>
-                      </div>
-                      <div class="budget-bar"><div class="budget-fill" style="width:{pct2:.1f}%;background:{bc}"></div></div>
-                    </div>"""
+                    spent = next((r[1] for r in tm_eg if r[0] == cat), 0)
+                    pct2  = min(spent / lim * 100, 100) if lim > 0 else 0
+                    bc    = "#ff4757" if pct2 >= 100 else "#ffa502" if pct2 >= 80 else "#00ff88"
+                    bhtml += (
+                        f"<div class='budget-row'>"
+                        f"<div class='budget-label'><span>{cat}</span>"
+                        f"<span class='{'red' if pct2>=100 else ''}'>{spent:,.0f} / {lim:,.0f} &#x111; ({pct2:.0f}%)</span></div>"
+                        f"<div class='budget-bar'><div class='budget-fill' style='width:{pct2:.1f}%;background:{bc}'></div></div>"
+                        f"</div>"
+                    )
                 bhtml += "</div>"
 
-            def _pct(v, total): return f"{v/total*100:.1f}%" if total>0 else "–"
+            def _pct(v, total): return f"{v/total*100:.1f}%" if total > 0 else "–"
             def _inc_rows(groups, total):
-                if not groups: return "<tr><td colspan='3' class='empty'>Chưa có thu nhập</td></tr>"
-                return "".join(f"<tr><td>{r[0]}</td><td class='amount green'>{r[1]:,.0f} đ</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
+                if not groups: return "<tr><td colspan='3' class='empty'>Ch&#432;a c&#243; thu nh&#x1EAD;p</td></tr>"
+                return "".join(f"<tr><td>{r[0]}</td><td class='amount green'>{r[1]:,.0f} &#x111;</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
             def _exp_rows(groups, total):
-                if not groups: return "<tr><td colspan='3' class='empty'>Chưa có chi tiêu</td></tr>"
-                return "".join(f"<tr><td>{r[0]}</td><td class='amount red'>{r[1]:,.0f} đ</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
+                if not groups: return "<tr><td colspan='3' class='empty'>Ch&#432;a c&#243; chi ti&#xEA;u</td></tr>"
+                return "".join(f"<tr><td>{r[0]}</td><td class='amount red'>{r[1]:,.0f} &#x111;</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
 
-            tx_rows = ""
-            for tx in recent:
-                _, ttype, amt, note, cat, created = tx
-                sign="+" if ttype=="income" else "-"
-                cls ="green" if ttype=="income" else "red"
-                icon="📈" if ttype=="income" else "📉"
-                dt  = (created or "")[:10]
-                tx_rows += f"<tr><td>{dt}</td><td>{icon} {cat}</td><td>{note or '–'}</td><td class='amount {cls}'>{sign}{amt:,.0f} đ</td></tr>"
-
-            def _bc(v): return "#00ff88" if v>=0 else "#ff4757"
+            def _bc(v): return "#00ff88" if v >= 0 else "#ff4757"
 
             finance_html = f"""
             <div class="card">
-              <h2>💵 Tổng Quan Tài Chính</h2>
+              <h2>&#x1F4B5; T&#x1ED5;ng Quan T&#xE0;i Ch&#xED;nh</h2>
               <div class="period-tabs">
                 <div class="period-card">
-                  <div class="period-label">📅 Tháng {cur_m:02d}/{cur_y}</div>
-                  <div class="prow green">Thu: {tm_i:,.0f} đ</div>
-                  <div class="prow red">Chi: {tm_e_:,.0f} đ</div>
-                  <div class="prow" style="color:{_bc(tm_b)}"><b>Dư: {tm_b:,.0f} đ</b></div>
+                  <div class="period-label">&#x1F4C5; Th&#xE1;ng {cur_m:02d}/{cur_y}</div>
+                  <div class="prow green">Thu: {tm_i:,.0f} &#x111;</div>
+                  <div class="prow red">Chi: {tm_e_:,.0f} &#x111;</div>
+                  <div class="prow" style="color:{_bc(tm_b)}"><b>D&#432;: {tm_b:,.0f} &#x111;</b></div>
                 </div>
                 <div class="period-card">
-                  <div class="period-label">⬅️ Tháng {lm_m:02d}/{lm_y}</div>
-                  <div class="prow green">Thu: {lm_i:,.0f} đ</div>
-                  <div class="prow red">Chi: {lm_e_:,.0f} đ</div>
-                  <div class="prow" style="color:{_bc(lm_b)}"><b>Dư: {lm_b:,.0f} đ</b></div>
+                  <div class="period-label">&#x2B05;&#xFE0F; Th&#xE1;ng {lm_m:02d}/{lm_y}</div>
+                  <div class="prow green">Thu: {lm_i:,.0f} &#x111;</div>
+                  <div class="prow red">Chi: {lm_e_:,.0f} &#x111;</div>
+                  <div class="prow" style="color:{_bc(lm_b)}"><b>D&#432;: {lm_b:,.0f} &#x111;</b></div>
                 </div>
                 <div class="period-card">
-                  <div class="period-label">🗓️ Năm {cur_y}</div>
-                  <div class="prow green">Thu: {ty_i:,.0f} đ</div>
-                  <div class="prow red">Chi: {ty_e_:,.0f} đ</div>
-                  <div class="prow" style="color:{_bc(ty_b)}"><b>Dư: {ty_b:,.0f} đ</b></div>
+                  <div class="period-label">&#x1F5D3;&#xFE0F; N&#x103;m {cur_y}</div>
+                  <div class="prow green">Thu: {ty_i:,.0f} &#x111;</div>
+                  <div class="prow red">Chi: {ty_e_:,.0f} &#x111;</div>
+                  <div class="prow" style="color:{_bc(ty_b)}"><b>D&#432;: {ty_b:,.0f} &#x111;</b></div>
                 </div>
                 <div class="period-card">
-                  <div class="period-label">⏰ Tất cả</div>
-                  <div class="prow green">Thu: {all_i:,.0f} đ</div>
-                  <div class="prow red">Chi: {all_e:,.0f} đ</div>
-                  <div class="prow" style="color:{_bc(all_b)}"><b>Dư: {all_b:,.0f} đ</b></div>
+                  <div class="period-label">&#x23F0; T&#x1EA5;t c&#x1EA3;</div>
+                  <div class="prow green">Thu: {all_i:,.0f} &#x111;</div>
+                  <div class="prow red">Chi: {all_e:,.0f} &#x111;</div>
+                  <div class="prow" style="color:{_bc(all_b)}"><b>D&#432;: {all_b:,.0f} &#x111;</b></div>
                 </div>
               </div>
             </div>
@@ -1112,16 +1238,16 @@ def _make_html(user_id: Optional[int] = None) -> str:  # noqa: C901
             {bhtml}
 
             <div class="card">
-              <h2>📅 Tháng {cur_m:02d}/{cur_y} — Thu Chi Theo Danh Mục</h2>
+              <h2>&#x1F4C5; Th&#xE1;ng {cur_m:02d}/{cur_y} &#x2014; Thu Chi Theo Danh M&#x1EE5;c</h2>
               <div class="two-col">
                 <div>
-                  <h3 class="sub-h">💵 Thu nhập theo nguồn</h3>
-                  <table><thead><tr><th>Nguồn</th><th>Số tiền</th><th>%</th></tr></thead>
+                  <h3 class="sub-h">&#x1F4B5; Thu nh&#x1EAD;p theo ngu&#x1ED3;n</h3>
+                  <table><thead><tr><th>Ngu&#x1ED3;n</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>%</th></tr></thead>
                   <tbody>{_inc_rows(tm_ig, tm_i)}</tbody></table>
                 </div>
                 <div>
-                  <h3 class="sub-h">💸 Chi tiêu theo danh mục</h3>
-                  <table><thead><tr><th>Danh mục</th><th>Số tiền</th><th>%</th></tr></thead>
+                  <h3 class="sub-h">&#x1F4B8; Chi ti&#xEA;u theo danh m&#x1EE5;c</h3>
+                  <table><thead><tr><th>Danh m&#x1EE5;c</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>%</th></tr></thead>
                   <tbody>{_exp_rows(tm_eg, tm_e_)}</tbody></table>
                 </div>
               </div>
@@ -1132,25 +1258,99 @@ def _make_html(user_id: Optional[int] = None) -> str:  # noqa: C901
             </div>
 
             <div class="card">
-              <h2>⬅️ Tháng {lm_m:02d}/{lm_y} — Chi Tiêu Theo Danh Mục</h2>
-              <table><thead><tr><th>Danh mục</th><th>Số tiền</th><th>%</th></tr></thead>
+              <h2>&#x2B05;&#xFE0F; Th&#xE1;ng {lm_m:02d}/{lm_y} &#x2014; Chi Ti&#xEA;u Theo Danh M&#x1EE5;c</h2>
+              <table><thead><tr><th>Danh m&#x1EE5;c</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>%</th></tr></thead>
               <tbody>{_exp_rows(lm_eg, lm_e_)}</tbody></table>
             </div>
 
             <div class="card">
-              <h2>📈 Xu Hướng Thu Chi — 13 Tháng Gần Nhất</h2>
+              <h2>&#x1F4C8; Xu H&#432;&#x1EDB;ng Thu Chi &#x2014; 13 Th&#xE1;ng G&#x1EA7;n Nh&#x1EA5;t</h2>
               <div class="chart-full"><canvas id="trendChart"></canvas></div>
-            </div>
-
-            <div class="card">
-              <h2>🕐 Giao Dịch Gần Đây (20 giao dịch)</h2>
-              <table><thead><tr><th>Ngày</th><th>Danh mục</th><th>Ghi chú</th><th>Số tiền</th></tr></thead>
-              <tbody>{tx_rows or "<tr><td colspan='4' class='empty'>Chưa có giao dịch</td></tr>"}</tbody></table>
             </div>"""
 
         except Exception as ex:
-            finance_html = f"<div class='card'><p style='color:#ff4757'>Lỗi: {ex}</p></div>"
+            finance_html = f"<div class='card'><p style='color:#ff4757'>L&#x1ED7;i: {ex}</p></div>"
 
+        # ── Income list ──────────────────────────────
+        try:
+            income_list = db_get_incomes_list(user_id, 50)
+            inc_rows = ""
+            for row in income_list:
+                iid, amt, source, note, cat = row
+                dt = str(cat or "")[:10]
+                safe_src  = str(source or "").replace("'", "&#39;").replace('"', "&quot;")
+                safe_note = str(note or "").replace("'", "&#39;").replace('"', "&quot;")
+                inc_rows += (
+                    f"<tr>"
+                    f"<td>{dt}</td>"
+                    f"<td>{safe_src}</td>"
+                    f"<td>{safe_note}</td>"
+                    f"<td class='amount green'>{amt:,.0f} &#x111;</td>"
+                    f"<td style='white-space:nowrap'>"
+                    f"<button class='btn-sm' onclick=\"openEdit('income',{{id:{iid},amount:{amt},cat:'{safe_src}',note:'{safe_note}',date:'{dt}'}})\">&#x270F;&#xFE0F;</button> "
+                    f"<button class='btn-del' onclick=\"deleteFinance({iid},'income')\">&#x1F5D1;&#xFE0F;</button>"
+                    f"</td></tr>"
+                )
+        except Exception as ex:
+            inc_rows = f"<tr><td colspan='5' class='empty'>L&#x1ED7;i: {ex}</td></tr>"
+
+        income_list_html = f"""
+        <div class="card">
+          <div class="card-hdr">
+            <h2>&#x1F4B0; Thu Nh&#x1EAD;p G&#x1EA7;n &#x110;&#xE2;y</h2>
+            <div class="btns">
+              <button class="btn-pri" onclick="openAddFinance('income')">&#x2795; Th&#xEA;m</button>
+              <button class="btn-sec" onclick="exportData('finance','csv')">&#x2B07;&#xFE0F; CSV</button>
+              <button class="btn-sec" onclick="exportData('finance','excel')">&#x2B07;&#xFE0F; Excel</button>
+              <label class="btn-sec" style="cursor:pointer">&#x2B06;&#xFE0F; Nh&#x1EAD;p file
+                <input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('finance',this)">
+              </label>
+            </div>
+          </div>
+          <div style="overflow-x:auto">
+          <table><thead><tr><th>Ng&#xE0;y</th><th>Ngu&#x1ED3;n</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>Thao t&#xE1;c</th></tr></thead>
+          <tbody>{inc_rows or '<tr><td colspan="5" class="empty">Ch&#432;a c&#243; thu nh&#x1EAD;p</td></tr>'}</tbody></table>
+          </div>
+        </div>"""
+
+        # ── Expense list ─────────────────────────────
+        try:
+            expense_list = db_get_expenses_list(user_id, 50)
+            exp_rows = ""
+            for row in expense_list:
+                eid, amt, category, note, cat = row
+                dt = str(cat or "")[:10]
+                safe_cat  = str(category or "").replace("'", "&#39;").replace('"', "&quot;")
+                safe_note = str(note or "").replace("'", "&#39;").replace('"', "&quot;")
+                exp_rows += (
+                    f"<tr>"
+                    f"<td>{dt}</td>"
+                    f"<td>{safe_cat}</td>"
+                    f"<td>{safe_note}</td>"
+                    f"<td class='amount red'>{amt:,.0f} &#x111;</td>"
+                    f"<td style='white-space:nowrap'>"
+                    f"<button class='btn-sm' onclick=\"openEdit('expense',{{id:{eid},amount:{amt},cat:'{safe_cat}',note:'{safe_note}',date:'{dt}'}})\">&#x270F;&#xFE0F;</button> "
+                    f"<button class='btn-del' onclick=\"deleteFinance({eid},'expense')\">&#x1F5D1;&#xFE0F;</button>"
+                    f"</td></tr>"
+                )
+        except Exception as ex:
+            exp_rows = f"<tr><td colspan='5' class='empty'>L&#x1ED7;i: {ex}</td></tr>"
+
+        expense_list_html = f"""
+        <div class="card">
+          <div class="card-hdr">
+            <h2>&#x1F4B8; Chi Ti&#xEA;u G&#x1EA7;n &#x110;&#xE2;y</h2>
+            <div class="btns">
+              <button class="btn-pri" onclick="openAddFinance('expense')">&#x2795; Th&#xEA;m</button>
+            </div>
+          </div>
+          <div style="overflow-x:auto">
+          <table><thead><tr><th>Ng&#xE0;y</th><th>Danh m&#x1EE5;c</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>Thao t&#xE1;c</th></tr></thead>
+          <tbody>{exp_rows or '<tr><td colspan="5" class="empty">Ch&#432;a c&#243; chi ti&#xEA;u</td></tr>'}</tbody></table>
+          </div>
+        </div>"""
+
+    # ── Assemble HTML ────────────────────────────────
     return f"""<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -1164,7 +1364,7 @@ body{{background:#0a0e27;color:#e8e8e8;font-family:'Segoe UI',sans-serif;padding
 h1{{color:#00d4ff;text-align:center;margin-bottom:6px;font-size:1.8em}}
 .subtitle{{text-align:center;color:#94a3b8;margin-bottom:24px;font-size:.85em}}
 .card{{background:#151932;border-radius:12px;padding:20px;margin-bottom:20px;border:1px solid #2a2a3e}}
-.card h2{{color:#00d4ff;margin-bottom:16px;font-size:1.15em;border-bottom:1px solid #2a2a3e;padding-bottom:10px}}
+.card h2{{color:#00d4ff;font-size:1.15em;margin:0}}
 h3.sub-h{{color:#94a3b8;font-size:.88em;margin-bottom:8px;font-weight:500;text-transform:uppercase;letter-spacing:.04em}}
 table{{width:100%;border-collapse:collapse;font-size:.88em}}
 th{{background:#16213e;color:#00d4ff;padding:9px 10px;text-align:left;font-weight:500}}
@@ -1188,29 +1388,63 @@ tr:hover td{{background:#1a2240}}
 .budget-bar{{background:#1e2a3e;border-radius:6px;height:10px;overflow:hidden}}
 .budget-fill{{height:100%;border-radius:6px}}
 footer{{text-align:center;color:#535c68;margin-top:20px;font-size:.78em;padding-bottom:16px}}
+.btn-pri{{background:#00d4ff;color:#0a0e27;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-weight:600}}
+.btn-pri:hover{{background:#00b8d9}}
+.btn-sec{{background:#2a2a3e;color:#e8e8e8;border:1px solid #3a3a5e;padding:8px 18px;border-radius:6px;cursor:pointer}}
+.btn-sec:hover{{background:#3a3a5e}}
+.btn-sm{{background:#1e2a4a;color:#94a3b8;border:1px solid #2a3a5e;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:.82em}}
+.btn-sm:hover{{background:#2a3a5e}}
+.btn-del{{background:#2d1515;color:#ff4757;border:1px solid #ff4757;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:.82em}}
+.btn-del:hover{{background:#ff4757;color:#fff}}
+.card-hdr{{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #2a2a3e;padding-bottom:10px}}
+.card-hdr h2{{color:#00d4ff;font-size:1.15em;margin:0}}
+.card-hdr .btns{{display:flex;gap:8px;flex-wrap:wrap}}
+label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
+.finput{{width:100%;margin-top:4px;background:#0f1730;color:#e8e8e8;border:1px solid #2a2a3e;padding:8px;border-radius:6px;font-size:.9em}}
+.finput:focus{{outline:none;border-color:#00d4ff}}
 @media(max-width:768px){{
   .two-col{{grid-template-columns:1fr}}
   .period-tabs{{grid-template-columns:1fr 1fr}}
   .chart-full{{height:220px}}
+  .card-hdr{{flex-direction:column;align-items:flex-start;gap:10px}}
 }}
 </style>
 </head>
 <body>
-<h1>🤖 Univer Bot Dashboard</h1>
-<div class="subtitle">{uid_note} · Cập nhật: {ts}</div>
-{crypto_html}
+<h1>&#x1F916; Univer Bot Dashboard</h1>
+<div class="subtitle">{uid_note} &middot; C&#x1EAD;p nh&#x1EAD;t: {ts}</div>
+
+{crypto_summary_html}
+{crypto_trades_html}
 {finance_html}
-<footer>Univer All-in-One Bot · Port {HTML_PORT}</footer>
+{income_list_html}
+{expense_list_html}
+
+<footer>Univer All-in-One Bot &middot; Port {HTML_PORT}</footer>
+
+<!-- Modal -->
+<div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:#151932;border:1px solid #2a2a3e;border-radius:12px;padding:24px;width:90%;max-width:480px;max-height:90vh;overflow-y:auto">
+    <h3 id="modalTitle" style="color:#00d4ff;margin-bottom:16px"></h3>
+    <div id="modalBody"></div>
+    <div style="margin-top:20px;display:flex;gap:10px;justify-content:flex-end">
+      <button onclick="closeModal()" class="btn-sec">H&#x1EE7;y</button>
+      <button onclick="submitModal()" class="btn-pri">L&#432;u</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const D={charts_json};
 const PAL=['#00d4ff','#00ff88','#ffa502','#ff4757','#a29bfe','#fd79a8','#55efc4','#fdcb6e','#e17055','#74b9ff','#b2bec3','#fab1a0'];
 const fmtK=v=>v>=1e9?(v/1e9).toFixed(1)+'B':v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':v;
+
 if(D.trend){{
   new Chart(document.getElementById('trendChart'),{{
     type:'bar',
     data:{{labels:D.trend.labels,datasets:[
       {{label:'Thu nhập',data:D.trend.income,backgroundColor:'rgba(0,255,136,.65)',borderColor:'#00ff88',borderWidth:1,borderRadius:4}},
-      {{label:'Chi tiêu',data:D.trend.expense,backgroundColor:'rgba(255,71,87,.65)',borderColor:'#ff4757',borderWidth:1,borderRadius:4}},
+      {{label:'Chi ti\xeau',data:D.trend.expense,backgroundColor:'rgba(255,71,87,.65)',borderColor:'#ff4757',borderWidth:1,borderRadius:4}},
     ]}},
     options:{{responsive:true,maintainAspectRatio:false,
       plugins:{{legend:{{labels:{{color:'#e8e8e8',font:{{size:12}}}}}}}},
@@ -1235,34 +1469,472 @@ function donut(id,title,data){{
   }});
 }}
 donut('incDonut','Thu nhập theo nguồn',D.inc_donut);
-donut('expDonut','Chi tiêu theo danh mục',D.exp_donut);
+donut('expDonut','Chi ti\xeau theo danh mục',D.exp_donut);
+
+// ── CRUD JS ──────────────────────────────────────────
+const UID=new URLSearchParams(location.search).get('user_id')||'';
+const TOK=new URLSearchParams(location.search).get('token')||'';
+
+async function api(path,body){{
+  const r=await fetch(`${{path}}?user_id=${{UID}}&token=${{TOK}}`,{{
+    method:'POST',
+    headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify(body)
+  }});
+  return r.json();
+}}
+
+function exportData(scope,fmt){{
+  window.location.href=`/api/export?user_id=${{UID}}&token=${{TOK}}&scope=${{scope}}&format=${{fmt}}`;
+}}
+
+function importFile(scope,input){{
+  const file=input.files[0]; if(!file) return;
+  const fmt=file.name.endsWith('.xlsx')?'excel':'csv';
+  const reader=new FileReader();
+  reader.onload=e=>{{
+    const bytes=new Uint8Array(e.target.result);
+    let bin=''; bytes.forEach(b=>bin+=String.fromCharCode(b));
+    const b64=btoa(bin);
+    api('/api/import',{{scope,format:fmt,data:b64}})
+      .then(r=>{{alert(`Nhập xong: ${{r.imported||0}} th\xe0nh c\xf4ng, ${{r.failed||0}} lỗi`);location.reload();  }})
+      .catch(e=>alert('Lỗi: '+e));
+  }};
+  reader.readAsArrayBuffer(file);
+}}
+
+let _ms={{}};
+
+function closeModal(){{document.getElementById('modal').style.display='none';}}
+
+function openAddCrypto(){{
+  _ms={{action:'add',scope:'crypto'}};
+  document.getElementById('modalTitle').textContent='➕ Th\xeam Giao Dịch Crypto';
+  const today=new Date().toISOString().slice(0,10);
+  document.getElementById('modalBody').innerHTML=`
+    <label>Symbol<input id="f_symbol" class="finput" placeholder="BTC"></label>
+    <label>Loại<select id="f_side" class="finput"><option value="BUY">Mua</option><option value="SELL">B\xe1n</option></select></label>
+    <label>Số lượng<input id="f_qty" class="finput" type="number" step="any"></label>
+    <label>Gi\xe1 (USD)<input id="f_price" class="finput" type="number" step="any"></label>
+    <label>Ph\xed (USD)<input id="f_fee" class="finput" type="number" step="any" value="0"></label>
+    <label>CoinGecko ID (tỹ chọn nếu trống)<input id="f_cgid" class="finput" placeholder="bitcoin"></label>
+    <label>Ghi ch\xfa<input id="f_note" class="finput"></label>
+    <label>Ng\xe0y<input id="f_date" class="finput" type="date" value="${{today}}"></label>
+  `;
+  document.getElementById('modal').style.display='flex';
+}}
+
+function openEdit(scope,data){{
+  _ms={{action:'edit',scope,data}};
+  if(scope==='crypto'){{
+    document.getElementById('modalTitle').textContent='✏️ Sửa Giao Dịch Crypto';
+    document.getElementById('modalBody').innerHTML=`
+      <label>Số lượng<input id="f_qty" class="finput" type="number" step="any" value="${{data.qty}}"></label>
+      <label>Gi\xe1 (USD)<input id="f_price" class="finput" type="number" step="any" value="${{data.price}}"></label>
+      <label>Ph\xed (USD)<input id="f_fee" class="finput" type="number" step="any" value="${{data.fee}}"></label>
+      <label>Ghi ch\xfa<input id="f_note" class="finput" value="${{data.note||''}}"></label>
+    `;
+  }} else if(scope==='income'){{
+    document.getElementById('modalTitle').textContent='✏️ Sửa Thu Nhập';
+    document.getElementById('modalBody').innerHTML=`
+      <label>Số tiền<input id="f_amount" class="finput" type="number" step="any" value="${{data.amount}}"></label>
+      <label>Nguồn<input id="f_cat" class="finput" value="${{data.cat||''}}"></label>
+      <label>Ghi ch\xfa<input id="f_note" class="finput" value="${{data.note||''}}"></label>
+      <label>Ng\xe0y<input id="f_date" class="finput" type="date" value="${{(data.date||'').slice(0,10)}}"></label>
+    `;
+  }} else {{
+    document.getElementById('modalTitle').textContent='✏️ Sửa Chi Ti\xeau';
+    document.getElementById('modalBody').innerHTML=`
+      <label>Số tiền<input id="f_amount" class="finput" type="number" step="any" value="${{data.amount}}"></label>
+      <label>Danh mục<input id="f_cat" class="finput" value="${{data.cat||''}}"></label>
+      <label>Ghi ch\xfa<input id="f_note" class="finput" value="${{data.note||''}}"></label>
+      <label>Ng\xe0y<input id="f_date" class="finput" type="date" value="${{(data.date||'').slice(0,10)}}"></label>
+    `;
+  }}
+  document.getElementById('modal').style.display='flex';
+}}
+
+function openAddFinance(ttype){{
+  _ms={{action:'add',scope:'finance',ttype}};
+  const label=ttype==='income'?'Thu Nhập':'Chi Ti\xeau';
+  const catLabel=ttype==='income'?'Nguồn':'Danh mục';
+  const today=new Date().toISOString().slice(0,10);
+  document.getElementById('modalTitle').textContent=`➕ Th\xeam ${{label}}`;
+  document.getElementById('modalBody').innerHTML=`
+    <label>Số tiền (VND)<input id="f_amount" class="finput" type="number" step="any"></label>
+    <label>${{catLabel}}<input id="f_cat" class="finput"></label>
+    <label>Ghi ch\xfa<input id="f_note" class="finput"></label>
+    <label>Ng\xe0y<input id="f_date" class="finput" type="date" value="${{today}}"></label>
+  `;
+  document.getElementById('modal').style.display='flex';
+}}
+
+async function submitModal(){{
+  const s=_ms;
+  try{{
+    let r;
+    if(s.scope==='crypto'){{
+      if(s.action==='add'){{
+        r=await api('/api/crypto/add',{{
+          symbol:v('f_symbol'),side:v('f_side'),
+          qty:v('f_qty'),price:v('f_price'),fee:v('f_fee')||0,
+          cg_id:v('f_cgid'),note:v('f_note'),date:v('f_date')
+        }});
+      }}else{{
+        r=await api('/api/crypto/update',{{
+          id:s.data.id,qty:v('f_qty'),price:v('f_price'),
+          fee:v('f_fee')||0,note:v('f_note')
+        }});
+      }}
+    }}else if(s.scope==='finance'){{
+      r=await api('/api/finance/add',{{
+        ttype:s.ttype,amount:v('f_amount'),
+        category:v('f_cat'),note:v('f_note'),date:v('f_date')
+      }});
+    }}else{{
+      r=await api('/api/finance/update',{{
+        id:s.data.id,ttype:s.scope,
+        amount:v('f_amount'),category:v('f_cat'),
+        note:v('f_note'),date:v('f_date')
+      }});
+    }}
+    if(r.ok){{closeModal();location.reload();}}
+    else alert('Lỗi: '+(r.error||'unknown'));
+  }}catch(e){{alert('Lỗi: '+e);}}
+}}
+
+async function deleteCrypto(id){{
+  if(!confirm('X\xf3a giao dịch n\xe0y?')) return;
+  const r=await api('/api/crypto/delete',{{id}});
+  if(r.ok) location.reload(); else alert('Lỗi: '+r.error);
+}}
+
+async function deleteFinance(id,ttype){{
+  if(!confirm('X\xf3a giao dịch n\xe0y?')) return;
+  const r=await api('/api/finance/delete',{{id,ttype}});
+  if(r.ok) location.reload(); else alert('Lỗi: '+r.error);
+}}
+
+function v(id){{const el=document.getElementById(id);return el?el.value:'';}}
+
+document.getElementById('modal').addEventListener('click',function(e){{
+  if(e.target===this) closeModal();
+}});
 </script>
 </body>
 </html>"""
 
-
 class _DashboardHandler(BaseHTTPRequestHandler):
+
+    # ── helpers ────────────────────────────────────────
+
+    def log_message(self, *a):
+        pass
+
+    def _send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_403(self):
+        body = b"<h2>403 Forbidden</h2><p>Thieu token hoac token sai.</p>"
+        self.send_response(403)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _check_auth(self, qs):
+        if not DASHBOARD_SECRET:
+            return True
+        return qs.get("token", [""])[0] == DASHBOARD_SECRET
+
+    def _read_body(self):
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b"{}"
+        return json.loads(raw.decode("utf-8"))
+
+    def _uid(self, qs):
+        try:
+            return int(qs["user_id"][0])
+        except Exception:
+            return None
+
+    # ── GET ────────────────────────────────────────────
+
     def do_GET(self):
-        parsed = urlparse(self.path); qs = parse_qs(parsed.query)
-        # Kiểm tra secret token nếu đã cấu hình DASHBOARD_SECRET
-        if DASHBOARD_SECRET:
-            token = qs.get("token", [""])[0]
-            if token != DASHBOARD_SECRET:
-                body = b"<h2>403 Forbidden</h2><p>Thieu token hoac token sai.</p>"
-                self.send_response(403)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers(); self.wfile.write(body)
-                return
-        uid = None
-        try: uid = int(qs["user_id"][0])
-        except Exception: pass
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        if not self._check_auth(qs):
+            self._send_403(); return
+        uid = self._uid(qs)
+        if parsed.path == "/api/export":
+            self._handle_export(uid, qs); return
         html = _make_html(uid).encode("utf-8")
         self.send_response(200)
-        self.send_header("Content-Type","text/html; charset=utf-8")
-        self.send_header("Content-Length",str(len(html)))
-        self.end_headers(); self.wfile.write(html)
-    def log_message(self, *a): pass
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers()
+        self.wfile.write(html)
+
+    # ── POST ───────────────────────────────────────────
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        if not self._check_auth(qs):
+            self._send_403(); return
+        uid = self._uid(qs)
+        try:
+            body = self._read_body()
+        except Exception as exc:
+            self._send_json({"error": f"JSON parse error: {exc}"}, 400); return
+        path = parsed.path
+        try:
+            if path == "/api/crypto/add":
+                self._api_crypto_add(uid, body)
+            elif path == "/api/crypto/delete":
+                self._api_crypto_delete(body)
+            elif path == "/api/crypto/update":
+                self._api_crypto_update(body)
+            elif path == "/api/finance/add":
+                self._api_finance_add(uid, body)
+            elif path == "/api/finance/delete":
+                self._api_finance_delete(body)
+            elif path == "/api/finance/update":
+                self._api_finance_update(body)
+            elif path == "/api/import":
+                self._api_import(uid, body); return
+            else:
+                self._send_json({"error": "unknown path"}, 404)
+        except Exception as exc:
+            self._send_json({"error": str(exc), "trace": traceback.format_exc()}, 500)
+
+    # ── export ─────────────────────────────────────────
+
+    def _handle_export(self, uid, qs):
+        scope = qs.get("scope", ["finance"])[0]
+        fmt   = qs.get("format", ["csv"])[0]
+        try:
+            if scope == "crypto":
+                rows  = db_crypto_get_trades(uid) if uid else []
+                heads = ["id","symbol","cg_id","side","qty","price_usd","fee_usd","note","created_at"]
+            else:
+                inc = db_get_incomes_list(uid, 1000) if uid else []
+                exp = db_get_expenses_list(uid, 1000) if uid else []
+                rows  = [("INC", r[0], r[1], r[2], r[3], r[4]) for r in inc] + \
+                        [("EXP", r[0], r[1], r[2], r[3], r[4]) for r in exp]
+                heads = ["type","id","amount","cat_or_source","note","created_at"]
+
+            fname = f"{scope}_export"
+            if fmt == "excel":
+                try:
+                    from openpyxl import Workbook
+                    wb = Workbook(); ws = wb.active
+                    ws.title = scope.capitalize()
+                    ws.append(heads)
+                    for r in rows:
+                        ws.append(list(r))
+                    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+                    data = buf.read()
+                    ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    dname = fname + ".xlsx"
+                except ImportError:
+                    self._send_json({"error": "openpyxl not installed"}, 500); return
+            else:
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow(heads)
+                for r in rows:
+                    w.writerow(list(r))
+                data = ("﻿" + buf.getvalue()).encode("utf-8")
+                ctype = "text/csv; charset=utf-8-sig"
+                dname = fname + ".csv"
+
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Disposition", f'attachment; filename="{dname}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data if isinstance(data, bytes) else data.encode("utf-8"))
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── crypto API ────────────────────────────────────
+
+    def _api_crypto_add(self, uid, body):
+        if not uid:
+            self._send_json({"error": "no user_id"}); return
+        symbol = str(body.get("symbol", "")).strip().upper()
+        side   = str(body.get("side", "BUY")).strip().upper()
+        qty    = float(body.get("qty", 0))
+        price  = float(body.get("price", 0))
+        fee    = float(body.get("fee", 0) or 0)
+        note   = str(body.get("note", "") or "")
+        cg_id  = str(body.get("cg_id", "") or "").strip() or None
+        date_s = str(body.get("date", "") or "").strip()
+        if not symbol or qty <= 0 or price < 0:
+            self._send_json({"error": "symbol/qty/price invalid"}); return
+        if not cg_id:
+            cg_id = db_crypto_get_map(symbol) or cg_guess_id_from_symbol(symbol)
+        try:
+            created_at = datetime.datetime.fromisoformat(date_s) if date_s else datetime.datetime.now()
+        except Exception:
+            created_at = datetime.datetime.now()
+        db_crypto_add_trade(uid, symbol, side, qty, price, note, created_at, cg_id, fee)
+        if cg_id:
+            db_crypto_upsert_map(symbol, cg_id)
+        self._send_json({"ok": True})
+
+    def _api_crypto_delete(self, body):
+        trade_id = int(body.get("id", 0))
+        if not trade_id:
+            self._send_json({"error": "no id"}); return
+        db_crypto_delete_trade(trade_id)
+        self._send_json({"ok": True})
+
+    def _api_crypto_update(self, body):
+        trade_id = int(body.get("id", 0))
+        if not trade_id:
+            self._send_json({"error": "no id"}); return
+        qty   = float(body.get("qty", 0))
+        price = float(body.get("price", 0))
+        fee   = float(body.get("fee", 0) or 0)
+        note  = str(body.get("note", "") or "")
+        db_crypto_update_trade(trade_id, qty, price, fee, note)
+        self._send_json({"ok": True})
+
+    # ── finance API ───────────────────────────────────
+
+    def _api_finance_add(self, uid, body):
+        if not uid:
+            self._send_json({"error": "no user_id"}); return
+        ttype    = str(body.get("ttype", "expense"))
+        amount   = float(body.get("amount", 0))
+        category = str(body.get("category", "") or "")
+        note     = str(body.get("note", "") or "")
+        date_s   = str(body.get("date", "") or "").strip()
+        if amount <= 0:
+            self._send_json({"error": "amount must be > 0"}); return
+        try:
+            created_at = datetime.datetime.fromisoformat(date_s) if date_s else datetime.datetime.now()
+        except Exception:
+            created_at = datetime.datetime.now()
+        if ttype == "income":
+            db_add_income(uid, amount, category or "Khác", note, created_at)
+        else:
+            db_add_expense(uid, amount, note, category or "Khác", created_at)
+        self._send_json({"ok": True})
+
+    def _api_finance_delete(self, body):
+        rec_id = int(body.get("id", 0))
+        ttype  = str(body.get("ttype", "expense"))
+        if not rec_id:
+            self._send_json({"error": "no id"}); return
+        db_delete_transaction(rec_id, ttype)
+        self._send_json({"ok": True})
+
+    def _api_finance_update(self, body):
+        rec_id   = int(body.get("id", 0))
+        ttype    = str(body.get("ttype", "expense"))
+        amount   = float(body.get("amount", 0))
+        category = str(body.get("category", "") or "")
+        note     = str(body.get("note", "") or "")
+        date_s   = str(body.get("date", "") or "").strip()
+        if not rec_id:
+            self._send_json({"error": "no id"}); return
+        if not date_s:
+            date_s = datetime.datetime.now().isoformat()
+        if ttype == "income":
+            db_update_income(rec_id, amount, category or "Khác", note, date_s)
+        else:
+            db_update_expense(rec_id, amount, category or "Khác", note, date_s)
+        self._send_json({"ok": True})
+
+    # ── import API ────────────────────────────────────
+
+    def _api_import(self, uid, body):
+        import base64
+        if not uid:
+            self._send_json({"error": "no user_id"}); return
+        scope  = str(body.get("scope", "finance"))
+        fmt    = str(body.get("format", "csv"))
+        data64 = str(body.get("data", ""))
+        try:
+            raw = base64.b64decode(data64)
+        except Exception as exc:
+            self._send_json({"error": f"base64 decode failed: {exc}"}); return
+
+        imported = failed = 0
+        try:
+            if fmt == "excel":
+                from openpyxl import load_workbook as _lw
+                wb = _lw(filename=io.BytesIO(raw), read_only=True, data_only=True)
+                ws = wb.active
+                headers = [str(c.value or "").strip().lower() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+                rows_iter = (
+                    {headers[i]: v for i, v in enumerate(row) if i < len(headers)}
+                    for row in ws.iter_rows(min_row=2, values_only=True)
+                )
+            else:
+                text = raw.decode("utf-8-sig")
+                reader = csv.DictReader(io.StringIO(text))
+                # normalise header keys
+                rows_iter = ({k.strip().lower(): v for k, v in r.items()} for r in reader)
+
+            for row in rows_iter:
+                if all((v is None or str(v).strip() == "") for v in row.values()):
+                    continue
+                try:
+                    if scope == "crypto":
+                        sym  = str(row.get("symbol") or row.get("asset") or "").strip().upper()
+                        side = str(row.get("side") or "BUY").strip().upper()
+                        qty  = float(row.get("qty") or row.get("quantity") or 0)
+                        price= float(row.get("price_usd") or row.get("price") or 0)
+                        fee  = float(row.get("fee_usd") or row.get("fee") or 0)
+                        note = str(row.get("note") or "")
+                        cg   = str(row.get("cg_id") or "").strip() or None
+                        dat  = str(row.get("created_at") or row.get("date") or "").strip()
+                        if not sym or qty <= 0:
+                            failed += 1; continue
+                        try:
+                            cat = datetime.datetime.fromisoformat(dat) if dat else datetime.datetime.now()
+                        except Exception:
+                            cat = datetime.datetime.now()
+                        cg = cg or db_crypto_get_map(sym) or cg_guess_id_from_symbol(sym)
+                        db_crypto_add_trade(uid, sym, side, qty, price, note, cat, cg, fee)
+                        if cg:
+                            db_crypto_upsert_map(sym, cg)
+                    else:  # finance
+                        ttype  = str(row.get("type") or row.get("ttype") or "expense").strip()
+                        amount = float(row.get("amount") or 0)
+                        cat_   = str(row.get("cat_or_source") or row.get("category") or row.get("source") or "Khác")
+                        note   = str(row.get("note") or "")
+                        dat    = str(row.get("created_at") or row.get("date") or "").strip()
+                        if amount <= 0:
+                            failed += 1; continue
+                        try:
+                            cat_dt = datetime.datetime.fromisoformat(dat) if dat else datetime.datetime.now()
+                        except Exception:
+                            cat_dt = datetime.datetime.now()
+                        if ttype.upper().startswith("INC") or ttype.lower() == "income":
+                            db_add_income(uid, amount, cat_, note, cat_dt)
+                        else:
+                            db_add_expense(uid, amount, note, cat_, cat_dt)
+                    imported += 1
+                except Exception:
+                    failed += 1
+        except Exception as exc:
+            self._send_json({"error": str(exc), "imported": imported, "failed": failed}); return
+
+        self._send_json({"ok": True, "imported": imported, "failed": failed})
+
+
+# ── SECTION 3: _make_html (full replacement) ───────────
 
 def start_html_server():
     server = HTTPServer(("0.0.0.0", HTML_PORT), _DashboardHandler)
