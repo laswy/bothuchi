@@ -4186,11 +4186,6 @@ async def check_recurring_job(context: ContextTypes.DEFAULT_TYPE):
 
 # ===================== MAIN =====================
 if __name__ == "__main__":
-    # Windows: aiohttp + asyncio cần SelectorEventLoop (không dùng ProactorEventLoop)
-    import sys
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
     if WEBHOOK_URL:
         # Webhook mode: single aiohttp server handles Telegram + dashboard
         app = build_app()

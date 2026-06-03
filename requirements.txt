@@ -1,4 +1,5 @@
-python-telegram-bot[job-queue]==22.*
+python-telegram-bot[job-queue,webhooks]==22.*
+aiohttp>=3.9.0
 matplotlib
 numpy
 requests>=2.32.0
