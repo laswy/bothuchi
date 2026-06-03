@@ -2640,13 +2640,38 @@ BTN_REPORT       = STRINGS['vi']['btn_report']
 def home_keyboard(lang: str = 'en') -> ReplyKeyboardMarkup:
     s = STRINGS[lang]
     return ReplyKeyboardMarkup([
-        [KeyboardButton(s['btn_crypto'])],
-        [KeyboardButton(s['btn_finance'])],
-        [KeyboardButton(s['btn_settings'])],
+        [KeyboardButton(s['btn_crypto']), KeyboardButton(s['btn_finance']), KeyboardButton(s['btn_settings'])],
     ], resize_keyboard=True)
 
 def main_menu_keyboard(lang: str = 'en') -> ReplyKeyboardMarkup:
     return home_keyboard(lang)
+
+def _crypto_nav_kb(lang: str = 'en') -> InlineKeyboardMarkup:
+    s = STRINGS[lang]
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(s['btn_portfolio'], callback_data="nav_crypto:portfolio"),
+         InlineKeyboardButton(s['btn_buy'],       callback_data="nav_crypto:buy"),
+         InlineKeyboardButton(s['btn_sell'],      callback_data="nav_crypto:sell")],
+        [InlineKeyboardButton(s['btn_chart'],     callback_data="nav_crypto:chart"),
+         InlineKeyboardButton(s['btn_report'],    callback_data="nav_crypto:report"),
+         InlineKeyboardButton(s['btn_map'],       callback_data="nav_crypto:map")],
+        [InlineKeyboardButton(s['btn_cimport'],   callback_data="nav_crypto:import"),
+         InlineKeyboardButton(s['btn_cexport'],   callback_data="nav_crypto:export"),
+         InlineKeyboardButton(s['btn_fdel'],      callback_data="nav_crypto:delete")],
+    ])
+
+def _finance_nav_kb(lang: str = 'en') -> InlineKeyboardMarkup:
+    s = STRINGS[lang]
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(s['btn_fadd'],      callback_data="nav_finance:add"),
+         InlineKeyboardButton(s['btn_fdel'],      callback_data="nav_finance:delete"),
+         InlineKeyboardButton(s['btn_budget'],    callback_data="nav_finance:budget")],
+        [InlineKeyboardButton(s['btn_recurring'], callback_data="nav_finance:recurring"),
+         InlineKeyboardButton(s['btn_report'],    callback_data="nav_finance:report"),
+         InlineKeyboardButton(s['btn_chart'],     callback_data="nav_finance:chart")],
+        [InlineKeyboardButton(s['btn_fimport'],   callback_data="nav_finance:import"),
+         InlineKeyboardButton(s['btn_fexport'],   callback_data="nav_finance:export")],
+    ])
 
 def crypto_menu_keyboard(lang: str = 'en') -> ReplyKeyboardMarkup:
     s = STRINGS[lang]
@@ -3002,12 +3027,12 @@ async def handle_crypto_menu_btns(update: Update, context: ContextTypes.DEFAULT_
 async def handle_home_crypto_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     lang = db_get_lang(uid); context.user_data['submenu'] = 'crypto'; context.user_data['lang'] = lang
-    await update.message.reply_text(t('menu_crypto', uid), parse_mode="Markdown", reply_markup=crypto_menu_keyboard(lang))
+    await update.message.reply_text(t('menu_crypto', uid), parse_mode="Markdown", reply_markup=_crypto_nav_kb(lang))
 
 async def handle_home_finance_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     lang = db_get_lang(uid); context.user_data['submenu'] = 'finance'; context.user_data['lang'] = lang
-    await update.message.reply_text(t('menu_finance', uid), parse_mode="Markdown", reply_markup=finance_menu_keyboard(lang))
+    await update.message.reply_text(t('menu_finance', uid), parse_mode="Markdown", reply_markup=_finance_nav_kb(lang))
 
 async def handle_back_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -3060,7 +3085,64 @@ async def handle_budget_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(t('budget_view_btn', uid), callback_data="budget_menu_view")],
         [InlineKeyboardButton(t('cancel', uid),          callback_data="cancel_action")],
     ])
-    await update.message.reply_text(t('budget_title', uid), parse_mode="Markdown", reply_markup=kb)
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(t('budget_title', uid), parse_mode="Markdown", reply_markup=kb)
+    else:
+        await update.message.reply_text(t('budget_title', uid), parse_mode="Markdown", reply_markup=kb)
+
+async def nav_inline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles nav_crypto and nav_finance inline button taps (non-ConversationHandler actions)."""
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    scope, action = q.data.split(":", 1)
+    context.user_data['submenu'] = 'crypto' if scope == 'nav_crypto' else 'finance'
+    context.user_data['lang'] = db_get_lang(uid)
+
+    if scope == 'nav_crypto':
+        if action == 'portfolio':
+            try:
+                await send_portfolio_images(q.message.chat_id, uid, context)
+            except Exception as e:
+                await q.message.reply_text(t('cp_no_data', uid).format(e=e))
+        elif action == 'buy':
+            await q.message.reply_text(t('cp_buy_help', uid), parse_mode="Markdown")
+        elif action == 'sell':
+            await q.message.reply_text(t('cp_sell_help', uid), parse_mode="Markdown")
+        elif action == 'map':
+            await q.message.reply_text(t('cp_map_help', uid), parse_mode="Markdown")
+        elif action == 'import':
+            tmp_fd, tmp = tempfile.mkstemp(prefix="crypto_tpl_", suffix=".csv"); os.close(tmp_fd)
+            with open(tmp, "w", newline="", encoding="utf-8") as tf:
+                tw = csv.writer(tf)
+                tw.writerow(["symbol","cg_id","side","qty","price_usd","fee_usd","note","created_at"])
+                tw.writerow(["ATOM","cosmos","BUY","1","10.0","0","","2025-01-01 12:00:00"])
+                tw.writerow(["BTC","bitcoin","BUY","0.01","50000","2.5","spot","2025-02-01 20:30:00"])
+            try:
+                with open(tmp, "rb") as f:
+                    await q.message.reply_document(f, filename="crypto_import_template.csv",
+                                                   caption=t('cp_import_hint', uid))
+            finally:
+                try: os.remove(tmp)
+                except Exception: pass
+        elif action == 'export':
+            rows = db_crypto_all_trades(uid)
+            if not rows:
+                await q.message.reply_text(t('cp_no_export', uid)); return
+            fd, path = tempfile.mkstemp(prefix="portfolio_", suffix=".csv"); os.close(fd)
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["symbol","cg_id","side","qty","price_usd","fee_usd","note","created_at"])
+                for r in db_crypto_all_trades(uid): w.writerow(r)
+            try:
+                with open(path, "rb") as f:
+                    await q.message.reply_document(f, filename="crypto_portfolio.csv", caption="✅")
+            finally:
+                try: os.remove(path)
+                except Exception: pass
+    else:  # nav_finance
+        if action == 'budget':
+            await handle_budget_btn(update, context)
 
 async def handle_budget_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -3852,7 +3934,8 @@ def build_app() -> "Application":
     # Finance ConversationHandlers (register FIRST for priority)
     add_conv=ConversationHandler(
         entry_points=[CommandHandler("them",handle_add_button),
-                      MessageHandler(filters.Regex(_mk_pattern('btn_fadd')),handle_add_button)],
+                      MessageHandler(filters.Regex(_mk_pattern('btn_fadd')),handle_add_button),
+                      CallbackQueryHandler(handle_add_button, pattern="^nav_finance:add$")],
         states={
             CHOOSING_ADD_TYPE:[CallbackQueryHandler(choose_add_type_callback,pattern="^add_type_")],
             CHOOSING_SUPPLEMENT_TYPE:[CallbackQueryHandler(choose_supplement_type_callback,pattern="^supplement_type_")],
@@ -3874,7 +3957,8 @@ def build_app() -> "Application":
     )
     delete_conv=ConversationHandler(
         entry_points=[CommandHandler("xoa",handle_delete_button),
-                      MessageHandler(filters.Regex(_mk_pattern('btn_fdel')),handle_delete_button)],
+                      MessageHandler(filters.Regex(_mk_pattern('btn_fdel')),handle_delete_button),
+                      CallbackQueryHandler(handle_delete_button, pattern="^nav_finance:delete$|^nav_crypto:delete$")],
         states={
             DELETE_CHOOSING_ACTION:[CallbackQueryHandler(choose_delete_action,pattern="^delete_action_")],
             DELETE_INDIVIDUAL_LISTING:[CallbackQueryHandler(delete_choose_item,pattern="^delete_id_")],
@@ -3886,27 +3970,31 @@ def build_app() -> "Application":
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     report_conv=ConversationHandler(
-        entry_points=[CommandHandler("baocao",report_start)],
+        entry_points=[CommandHandler("baocao",report_start),
+                      CallbackQueryHandler(report_start, pattern="^nav_finance:report$|^nav_crypto:report$")],
         states={CHOOSING_REPORT_PERIOD:[CallbackQueryHandler(generate_report_for_period,pattern="^report_period_|^cancel_action$")]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     chart_conv=ConversationHandler(
-        entry_points=[CommandHandler("bieudo",chart_start)],
+        entry_points=[CommandHandler("bieudo",chart_start),
+                      CallbackQueryHandler(chart_start, pattern="^nav_finance:chart$|^nav_crypto:chart$")],
         states={CHOOSING_CHART_PERIOD:[CallbackQueryHandler(generate_charts_for_period,pattern="^chart_period_|^cancel_action$")]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     export_conv=ConversationHandler(
         entry_points=[CommandHandler("xuatfile",export_file_start),
-                      MessageHandler(filters.Regex(_mk_pattern('btn_fexport')),export_file_start)],
+                      MessageHandler(filters.Regex(_mk_pattern('btn_fexport')),export_file_start),
+                      CallbackQueryHandler(export_file_start, pattern="^nav_finance:export$")],
         states={EXPORT_CHOOSING_FORMAT:[CallbackQueryHandler(handle_export_choice,pattern="^export_|^cancel_action$")]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     import_conv=ConversationHandler(
         entry_points=[CommandHandler("nhapfile",import_file_start),
-                      MessageHandler(filters.Regex(_mk_pattern('btn_fimport')),import_file_start)],
+                      MessageHandler(filters.Regex(_mk_pattern('btn_fimport')),import_file_start),
+                      CallbackQueryHandler(import_file_start, pattern="^nav_finance:import$")],
         states={IMPORT_FILE_UPLOADED:[MessageHandler(filters.Document.ALL,handle_import_file_upload)]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
@@ -3920,7 +4008,8 @@ def build_app() -> "Application":
     app.add_handler(import_conv)
 
     recurring_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(_mk_pattern('btn_recurring')), handle_recurring_btn)],
+        entry_points=[MessageHandler(filters.Regex(_mk_pattern('btn_recurring')), handle_recurring_btn),
+                      CallbackQueryHandler(handle_recurring_btn, pattern="^nav_finance:recurring$")],
         states={
             RECURRING_LIST:[
                 CallbackQueryHandler(recurring_list_callback,    pattern="^recur_add$|^recur_edit_|^recur_del_|^recur_back_list$|^recur_noop_")],
@@ -3971,6 +4060,8 @@ def build_app() -> "Application":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_back')), handle_back_btn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_settings')), handle_settings_btn))
     app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings:"))
+    app.add_handler(CallbackQueryHandler(nav_inline_callback,
+        pattern="^nav_crypto:(portfolio|buy|sell|map|import|export)$|^nav_finance:budget$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_budget')), handle_budget_btn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_recurring')), handle_recurring_btn))
 
