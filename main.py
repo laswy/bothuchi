@@ -52,8 +52,12 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN        = os.environ["TELEGRAM_BOT_TOKEN"]
 DB_PATH          = os.environ.get("UNIVER_DB_PATH", "univer_all_in_one.db")
 HTML_PORT        = int(os.environ.get("HTML_PORT", "8080"))
-DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET", "")  # nếu đặt, URL cần ?token=xxx
-COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET", "")
+
+# Webhook config (để trống = dùng polling)
+WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "").rstrip("/")   # vd: https://mybot.up.railway.app
+WEBHOOK_PORT   = int(os.environ.get("WEBHOOK_PORT") or os.environ.get("PORT") or "8443")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
 OWNER_USER_ID   = 679130099
 CHANNEL_CHAT_ID    = int(os.environ.get("CHANNEL_CHAT_ID",    "-1001974996093"))
@@ -3805,5 +3809,18 @@ if __name__ == "__main__":
         job_queue.run_once(check_recurring_job, when=5, name="recurring_startup")
     else:
         logger.warning("JobQueue không khả dụng — cài lại: pip install 'python-telegram-bot[job-queue]'")
-    logger.info(f"Bot đang chạy... HTML dashboard port {HTML_PORT}")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    if WEBHOOK_URL:
+        wh_path = f"/wh/{BOT_TOKEN}"
+        wh_full = f"{WEBHOOK_URL}{wh_path}"
+        logger.info(f"Webhook mode — {wh_full}  (port {WEBHOOK_PORT})")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=WEBHOOK_PORT,
+            url_path=wh_path,
+            webhook_url=wh_full,
+            secret_token=WEBHOOK_SECRET or None,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    else:
+        logger.info(f"Polling mode — HTML dashboard port {HTML_PORT}")
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
