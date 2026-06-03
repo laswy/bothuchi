@@ -31,5 +31,26 @@ fi
 
 # Chạy bot
 cd "$DIR"
+
+# Nếu có WEBHOOK_URL trong .env → hiển thị mode
+source "$DIR/.env" 2>/dev/null || true
+if [ -n "$WEBHOOK_URL" ]; then
+    echo "Chế độ: Webhook → $WEBHOOK_URL"
+else
+    echo "Chế độ: Polling (thêm WEBHOOK_URL vào .env để dùng webhook)"
+fi
+
+# Nếu truyền tham số --tunnel → chạy cloudflared kèm theo
+if [ "$1" = "--tunnel" ]; then
+    if ! command -v cloudflared &>/dev/null; then
+        echo "⚠️  cloudflared chưa được cài. Xem hướng dẫn trong DEPLOY.md"
+        exit 1
+    fi
+    echo "Khởi động cloudflared tunnel..."
+    cloudflared tunnel run bothuchi &
+    TUNNEL_PID=$!
+    trap "kill $TUNNEL_PID 2>/dev/null" EXIT
+fi
+
 echo "Khởi động bot..."
 python main.py

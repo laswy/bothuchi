@@ -8,6 +8,126 @@ Chỉ cần đặt `WEBHOOK_URL` là bot tự chuyển sang webhook mode.
 
 ---
 
+## Cloudflare Tunnel (Chạy tại máy — Miễn phí, Khuyến nghị)
+
+**Ưu điểm:** Không cần VPS, không cần mở port, không cần domain trả phí.  
+Cloudflare làm HTTPS proxy miễn phí từ internet vào máy bạn.
+
+### Yêu cầu
+- Tài khoản Cloudflare miễn phí tại [cloudflare.com](https://cloudflare.com)
+- Một domain (mua hoặc dùng domain miễn phí) đã thêm vào Cloudflare
+- Máy chạy Linux/Windows/Mac
+
+### Cài cloudflared
+
+**Linux/Ubuntu:**
+```bash
+curl -L https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared jammy main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt update && sudo apt install cloudflared
+```
+
+**Windows:** Tải tại https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+
+### Thiết lập tunnel có tên (permanent URL)
+
+```bash
+# 1. Đăng nhập Cloudflare
+cloudflared tunnel login
+
+# 2. Tạo tunnel (đặt tên tùy ý)
+cloudflared tunnel create bothuchi
+
+# 3. Xem tunnel ID vừa tạo
+cloudflared tunnel list
+```
+
+Tạo file cấu hình `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <TUNNEL_ID>        # ID từ bước trên, dạng uuid
+credentials-file: /home/<user>/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # Webhook Telegram → port 8443
+  - hostname: bot.yourdomain.com
+    service: http://localhost:8443
+
+  # Dashboard HTML → port 8080
+  - hostname: dash.yourdomain.com
+    service: http://localhost:8080
+
+  # Bắt buộc có dòng này ở cuối
+  - service: http_status:404
+```
+
+```bash
+# 4. Trỏ DNS subdomain vào tunnel
+cloudflared tunnel route dns bothuchi bot.yourdomain.com
+cloudflared tunnel route dns bothuchi dash.yourdomain.com
+
+# 5. Chạy thử
+cloudflared tunnel run bothuchi
+```
+
+### Cấu hình `.env`
+
+```env
+TELEGRAM_BOT_TOKEN=your_token
+WEBHOOK_URL=https://bot.yourdomain.com
+WEBHOOK_PORT=8443
+WEBHOOK_SECRET=random_string_kho_doan
+DASHBOARD_SECRET=mat_khau_dashboard
+```
+
+### Chạy bot + tunnel cùng lúc
+
+**Terminal 1:**
+```bash
+./run.sh
+```
+
+**Terminal 2:**
+```bash
+cloudflared tunnel run bothuchi
+```
+
+Hoặc dùng 1 lệnh:
+```bash
+./run.sh & cloudflared tunnel run bothuchi
+```
+
+### Tự khởi động khi máy bật (Linux systemd)
+
+```bash
+sudo cloudflared service install
+sudo systemctl enable cloudflared
+sudo systemctl start cloudflared
+```
+
+---
+
+### Nhanh hơn: Quick tunnel (không cần domain, URL tạm)
+
+Dùng để **test thử** — URL thay đổi mỗi lần khởi động:
+
+```bash
+# Terminal 1: chạy bot (polling trước)
+python main.py
+
+# Terminal 2: lấy URL tạm
+cloudflared tunnel --url http://localhost:8443
+# → Nhận URL dạng: https://random-name.trycloudflare.com
+```
+
+Sau khi có URL, đặt vào `.env`:
+```env
+WEBHOOK_URL=https://random-name.trycloudflare.com
+```
+Rồi restart bot. Lưu ý: mỗi lần restart cloudflared thì phải đổi `WEBHOOK_URL`.
+
+---
+
 ## Railway.app (Dễ nhất)
 
 1. Push code lên GitHub
