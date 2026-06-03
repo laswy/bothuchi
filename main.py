@@ -301,12 +301,28 @@ def fmt_amount(amount_vnd: float, uid: int) -> str:
 
 def parse_finance_amount(text: str, uid: int) -> float:
     """Parse a finance amount from user input. Returns the value in VND.
-    If the user's currency is USD, the parsed number is multiplied by the
-    current VND/USD rate before being stored."""
-    raw = parse_amount(text)
+    USD currency: uses US decimal conventions (. = decimal, , = thousands).
+    VND currency: uses Vietnamese conventions (k, tr suffixes, etc.)."""
+    text = text.strip()
     if db_get_currency(uid) == 'USD':
-        return raw * _get_vnd_per_usd()
-    return raw
+        clean = text.lstrip('$').strip()
+        lower = clean.lower().replace(',', '')
+        for suf, mult in [('m', 1_000_000), ('k', 1_000)]:
+            if lower.endswith(suf):
+                try:
+                    val = float(lower[:-1]) * mult
+                    return (val * _get_vnd_per_usd()) if val > 0 else 0.0
+                except ValueError:
+                    break
+        try:
+            val = float(lower)
+            return (val * _get_vnd_per_usd()) if val > 0 else 0.0
+        except ValueError:
+            pass
+        raw = parse_amount(text)
+        return (raw * _get_vnd_per_usd()) if raw else 0.0
+    raw = parse_amount(text)
+    return raw if raw is not None else 0.0
 
 def db_crypto_upsert_map(symbol: str, cg_id: str, name: Optional[str] = None):
     conn = db_conn(); cur = conn.cursor()
@@ -2900,115 +2916,146 @@ async def cancel_conversation_callback(update: Update, context: ContextTypes.DEF
 # ===================== ADD FINANCE FLOW =====================
 async def handle_add_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
+    uid = update.effective_user.id
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Thu nhập (Hôm nay)",callback_data="add_type_income_today")],
-        [InlineKeyboardButton("Chi tiêu (Hôm nay)",callback_data="add_type_expense_today")],
-        [InlineKeyboardButton("Bổ sung giao dịch",callback_data="add_type_supplement")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]
+        [InlineKeyboardButton(t('fin_btn_income_today',uid),callback_data="add_type_income_today")],
+        [InlineKeyboardButton(t('fin_btn_expense_today',uid),callback_data="add_type_expense_today")],
+        [InlineKeyboardButton(t('fin_btn_supplement',uid),callback_data="add_type_supplement")],
+        [InlineKeyboardButton(t('fin_btn_cancel',uid),callback_data="cancel_action")]
     ])
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("Bạn muốn thêm loại giao dịch nào?",reply_markup=kb)
+        await update.callback_query.edit_message_text(t('fin_add_type',uid),reply_markup=kb)
     else:
-        await update.message.reply_text("Bạn muốn thêm loại giao dịch nào?",reply_markup=kb)
+        await update.message.reply_text(t('fin_add_type',uid),reply_markup=kb)
     return CHOOSING_ADD_TYPE
 
 async def choose_add_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer(); choice=q.data
+    q=update.callback_query; await q.answer(); choice=q.data; uid=q.from_user.id
     if choice=="add_type_income_today":
         context.user_data['transaction_type']="income"; context.user_data['created_at']=datetime.datetime.now()
-        await q.edit_message_text("Nhập số tiền thu nhập (VD: 5tr, 200k):"); return CHOOSING_INCOME_AMOUNT
+        await q.edit_message_text(t('fin_enter_income_amt',uid)); return CHOOSING_INCOME_AMOUNT
     elif choice=="add_type_expense_today":
         context.user_data['transaction_type']="expense"; context.user_data['created_at']=datetime.datetime.now()
-        await q.edit_message_text("Nhập số tiền chi tiêu (VD: 5tr2, 100k):"); return CHOOSING_EXPENSE_AMOUNT
+        await q.edit_message_text(t('fin_enter_expense_amt',uid)); return CHOOSING_EXPENSE_AMOUNT
     elif choice=="add_type_supplement":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("Thu nhập",callback_data="supplement_type_income")],
-            [InlineKeyboardButton("Chi tiêu",callback_data="supplement_type_expense")],
-            [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-        await q.edit_message_text("Bổ sung Thu nhập hay Chi tiêu?",reply_markup=kb); return CHOOSING_SUPPLEMENT_TYPE
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('fin_btn_income',uid),callback_data="supplement_type_income")],
+            [InlineKeyboardButton(t('fin_btn_expense',uid),callback_data="supplement_type_expense")],
+            [InlineKeyboardButton(t('fin_btn_cancel',uid),callback_data="cancel_action")]])
+        await q.edit_message_text(t('fin_supp_title',uid),reply_markup=kb); return CHOOSING_SUPPLEMENT_TYPE
     return await cancel_conversation_callback(update,context)
 
 async def choose_supplement_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer(); choice=q.data
+    q=update.callback_query; await q.answer(); choice=q.data; uid=q.from_user.id
     context.user_data.pop('created_at',None)
     if choice=="supplement_type_income":
         context.user_data['transaction_type']="income"
-        await q.edit_message_text("Nhập số tiền thu nhập:"); return CHOOSING_INCOME_AMOUNT
+        await q.edit_message_text(t('fin_enter_income_amt',uid)); return CHOOSING_INCOME_AMOUNT
     elif choice=="supplement_type_expense":
         context.user_data['transaction_type']="expense"
-        await q.edit_message_text("Nhập số tiền chi tiêu:"); return CHOOSING_EXPENSE_AMOUNT
+        await q.edit_message_text(t('fin_enter_expense_amt',uid)); return CHOOSING_EXPENSE_AMOUNT
     return await cancel_conversation_callback(update,context)
 
-def _income_source_kb():
+_INCOME_LABELS: dict[str, dict[str, str]] = {
+    'Lương':          {'en': 'Salary',            'vi': 'Lương'},
+    'Thưởng':         {'en': 'Bonus',              'vi': 'Thưởng'},
+    'Kinh doanh':     {'en': 'Business',           'vi': 'Kinh doanh'},
+    'Được cho':       {'en': 'Gift/Given',         'vi': 'Được cho'},
+    'Thu hồi nợ':     {'en': 'Debt recovery',      'vi': 'Thu hồi nợ'},
+    'Bán tài sản':    {'en': 'Asset sale',         'vi': 'Bán tài sản'},
+    'Lãi tiết kiệm':  {'en': 'Savings interest',   'vi': 'Lãi tiết kiệm'},
+    'Lãi đầu tư':     {'en': 'Investment return',  'vi': 'Lãi đầu tư'},
+    'Khác':           {'en': 'Other',              'vi': 'Khác'},
+}
+_EXPENSE_LABELS: dict[str, dict[str, str]] = {
+    'Ăn uống':   {'en': 'Food & Drink',   'vi': 'Ăn uống'},
+    'Di chuyển': {'en': 'Transport',      'vi': 'Di chuyển'},
+    'Mua sắm':   {'en': 'Shopping',       'vi': 'Mua sắm'},
+    'Hóa đơn':   {'en': 'Bills',          'vi': 'Hóa đơn'},
+    'Gia đình':  {'en': 'Family',         'vi': 'Gia đình'},
+    'Sức khỏe':  {'en': 'Healthcare',     'vi': 'Sức khỏe'},
+    'Giải trí':  {'en': 'Entertainment',  'vi': 'Giải trí'},
+    'Đầu tư':    {'en': 'Investment',     'vi': 'Đầu tư'},
+    'Tiết kiệm': {'en': 'Savings',        'vi': 'Tiết kiệm'},
+    'Khác':      {'en': 'Other',          'vi': 'Khác'},
+}
+
+def _lbl(mapping: dict, key: str, lang: str) -> str:
+    return mapping.get(key, {}).get(lang, key)
+
+def _income_source_kb(lang: str = 'en'):
+    def lbl(k): return _lbl(_INCOME_LABELS, k, lang)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Lương",callback_data="income_source_Lương"),InlineKeyboardButton("Thưởng",callback_data="income_source_Thưởng")],
-        [InlineKeyboardButton("Kinh doanh",callback_data="income_source_Kinh doanh"),InlineKeyboardButton("Được cho",callback_data="income_source_Được cho")],
-        [InlineKeyboardButton("Thu hồi nợ",callback_data="income_source_Thu hồi nợ"),InlineKeyboardButton("Bán tài sản",callback_data="income_source_Bán tài sản")],
-        [InlineKeyboardButton("Lãi tiết kiệm",callback_data="income_source_Lãi tiết kiệm"),InlineKeyboardButton("Lãi đầu tư",callback_data="income_source_Lãi đầu tư")],
-        [InlineKeyboardButton("Khác",callback_data="income_source_Khác")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]
+        [InlineKeyboardButton(lbl('Lương'),callback_data="income_source_Lương"),InlineKeyboardButton(lbl('Thưởng'),callback_data="income_source_Thưởng")],
+        [InlineKeyboardButton(lbl('Kinh doanh'),callback_data="income_source_Kinh doanh"),InlineKeyboardButton(lbl('Được cho'),callback_data="income_source_Được cho")],
+        [InlineKeyboardButton(lbl('Thu hồi nợ'),callback_data="income_source_Thu hồi nợ"),InlineKeyboardButton(lbl('Bán tài sản'),callback_data="income_source_Bán tài sản")],
+        [InlineKeyboardButton(lbl('Lãi tiết kiệm'),callback_data="income_source_Lãi tiết kiệm"),InlineKeyboardButton(lbl('Lãi đầu tư'),callback_data="income_source_Lãi đầu tư")],
+        [InlineKeyboardButton(lbl('Khác'),callback_data="income_source_Khác")],
+        [InlineKeyboardButton(t('fin_btn_cancel',0),callback_data="cancel_action")]
     ])
 
-def _expense_cat_kb():
+def _expense_cat_kb(lang: str = 'en'):
+    def lbl(k): return _lbl(_EXPENSE_LABELS, k, lang)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Ăn uống",callback_data="expense_category_Ăn uống"),InlineKeyboardButton("Di chuyển",callback_data="expense_category_Di chuyển")],
-        [InlineKeyboardButton("Mua sắm",callback_data="expense_category_Mua sắm"),InlineKeyboardButton("Hóa đơn",callback_data="expense_category_Hóa đơn")],
-        [InlineKeyboardButton("Gia đình",callback_data="expense_category_Gia đình"),InlineKeyboardButton("Sức khỏe",callback_data="expense_category_Sức khỏe")],
-        [InlineKeyboardButton("Giải trí",callback_data="expense_category_Giải trí"),InlineKeyboardButton("Đầu tư",callback_data="expense_category_Đầu tư")],
-        [InlineKeyboardButton("Tiết kiệm",callback_data="expense_category_Tiết kiệm"),InlineKeyboardButton("Khác",callback_data="expense_category_Khác")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]
+        [InlineKeyboardButton(lbl('Ăn uống'),callback_data="expense_category_Ăn uống"),InlineKeyboardButton(lbl('Di chuyển'),callback_data="expense_category_Di chuyển")],
+        [InlineKeyboardButton(lbl('Mua sắm'),callback_data="expense_category_Mua sắm"),InlineKeyboardButton(lbl('Hóa đơn'),callback_data="expense_category_Hóa đơn")],
+        [InlineKeyboardButton(lbl('Gia đình'),callback_data="expense_category_Gia đình"),InlineKeyboardButton(lbl('Sức khỏe'),callback_data="expense_category_Sức khỏe")],
+        [InlineKeyboardButton(lbl('Giải trí'),callback_data="expense_category_Giải trí"),InlineKeyboardButton(lbl('Đầu tư'),callback_data="expense_category_Đầu tư")],
+        [InlineKeyboardButton(lbl('Tiết kiệm'),callback_data="expense_category_Tiết kiệm"),InlineKeyboardButton(lbl('Khác'),callback_data="expense_category_Khác")],
+        [InlineKeyboardButton(t('fin_btn_cancel',0),callback_data="cancel_action")]
     ])
 
 async def get_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        amount=parse_finance_amount(update.message.text, update.effective_user.id)
-        if amount<=0: await update.message.reply_text("Số tiền phải > 0:"); return CHOOSING_INCOME_AMOUNT
-        if amount>LARGE_AMOUNT_THRESHOLD:
-            context.user_data['amount_to_confirm']=amount
-            kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Đúng vậy",callback_data="confirm_amount_yes")],
-                [InlineKeyboardButton("❌ Nhập lại",callback_data="confirm_amount_no")],
-                [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-            uid=update.effective_user.id
-            await update.message.reply_text(t('fin_confirm_large',uid).format(type="thu" if db_get_lang(uid)=='vi' else "income",amount=fmt_amount(amount,uid)),reply_markup=kb)
-            return CONFIRM_INCOME_AMOUNT
-        context.user_data['amount']=amount
-        await update.message.reply_text("Nhập ghi chú cho khoản thu:"); return CHOOSING_INCOME_NOTE
-    except Exception: await update.message.reply_text("Không hợp lệ. Thử lại (VD: 5tr, 200k):"); return CHOOSING_INCOME_AMOUNT
+    uid=update.effective_user.id
+    amount=parse_finance_amount(update.message.text, uid)
+    if amount<=0:
+        await update.message.reply_text(t('fin_amount_gt0',uid)); return CHOOSING_INCOME_AMOUNT
+    if amount>LARGE_AMOUNT_THRESHOLD:
+        context.user_data['amount_to_confirm']=amount
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('fin_btn_yes',uid),callback_data="confirm_amount_yes")],
+            [InlineKeyboardButton(t('fin_btn_retype',uid),callback_data="confirm_amount_no")],
+            [InlineKeyboardButton(t('fin_btn_cancel',uid),callback_data="cancel_action")]])
+        await update.message.reply_text(t('fin_confirm_large',uid).format(type=t('fin_btn_income',uid),amount=fmt_amount(amount,uid)),reply_markup=kb)
+        return CONFIRM_INCOME_AMOUNT
+    context.user_data['amount']=amount
+    await update.message.reply_text(t('fin_enter_income_note',uid)); return CHOOSING_INCOME_NOTE
 
 async def confirm_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="confirm_amount_yes":
         context.user_data['amount']=context.user_data.pop('amount_to_confirm')
-        await q.edit_message_text("Đã xác nhận. Nhập ghi chú:"); return CHOOSING_INCOME_NOTE
+        await q.edit_message_text(t('fin_confirmed_note',uid)); return CHOOSING_INCOME_NOTE
     elif q.data=="confirm_amount_no":
         context.user_data.pop('amount_to_confirm',None)
-        await q.edit_message_text("Nhập lại số tiền:"); return CHOOSING_INCOME_AMOUNT
+        await q.edit_message_text(t('fin_retype_amount',uid)); return CHOOSING_INCOME_AMOUNT
     return await cancel_conversation_callback(update,context)
 
 async def get_income_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid=update.effective_user.id; lang=db_get_lang(uid)
     context.user_data['note']=update.message.text
     if 'created_at' in context.user_data:
-        await update.message.reply_text("Chọn nguồn thu nhập:",reply_markup=_income_source_kb()); return CHOOSING_INCOME_SOURCE
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("Hôm nay",callback_data="date_today_income")],
-        [InlineKeyboardButton("Ngày khác",callback_data="date_other_income")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-    await update.message.reply_text("Giao dịch vào ngày nào?",reply_markup=kb); return CHOOSING_INCOME_DATE
+        await update.message.reply_text(t('fin_choose_source',uid),reply_markup=_income_source_kb(lang)); return CHOOSING_INCOME_SOURCE
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('fin_btn_today',uid),callback_data="date_today_income")],
+        [InlineKeyboardButton(t('fin_btn_other_date',uid),callback_data="date_other_income")],
+        [InlineKeyboardButton(t('fin_btn_cancel',uid),callback_data="cancel_action")]])
+    await update.message.reply_text(t('fin_choose_date',uid),reply_markup=kb); return CHOOSING_INCOME_DATE
 
 async def choose_income_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id; lang=db_get_lang(uid)
     if q.data=="date_today_income":
         context.user_data['created_at']=datetime.datetime.now()
-        await q.edit_message_text("Chọn nguồn thu nhập:",reply_markup=_income_source_kb()); return CHOOSING_INCOME_SOURCE
+        await q.edit_message_text(t('fin_choose_source',uid),reply_markup=_income_source_kb(lang)); return CHOOSING_INCOME_SOURCE
     elif q.data=="date_other_income":
-        await q.edit_message_text("Nhập ngày (VD: 25/06/2024 hoặc 15/1):"); return CHOOSING_INCOME_DATE
+        await q.edit_message_text(t('fin_enter_date',uid)); return CHOOSING_INCOME_DATE
     return await cancel_conversation_callback(update,context)
 
 async def get_income_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid=update.effective_user.id; lang=db_get_lang(uid)
     try:
         context.user_data['created_at']=parse_date(update.message.text)
-        await update.message.reply_text("Chọn nguồn thu nhập:",reply_markup=_income_source_kb()); return CHOOSING_INCOME_SOURCE
+        await update.message.reply_text(t('fin_choose_source',uid),reply_markup=_income_source_kb(lang)); return CHOOSING_INCOME_SOURCE
     except ValueError as e:
-        await update.message.reply_text(f"{e} Nhập lại ngày:"); return CHOOSING_INCOME_DATE
+        await update.message.reply_text(t('fin_invalid_date',uid).format(e=e)); return CHOOSING_INCOME_DATE
 
 async def get_income_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q=update.callback_query; await q.answer()
@@ -3017,61 +3064,64 @@ async def get_income_source(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     amount=context.user_data.get('amount'); note=context.user_data.get('note')
     created_at=context.user_data.get('created_at')
     db_add_income(user_id,amount,source,note,created_at)
-    await q.edit_message_text(f"✅ Thu nhập: {amount:,.0f} đ - {source} ({note}) ngày {created_at.strftime('%d/%m/%Y')}")
+    src_lbl=_lbl(_INCOME_LABELS, source, db_get_lang(user_id))
+    await q.edit_message_text(t('fin_saved_income',user_id).format(
+        amount=fmt_amount(amount,user_id), source=src_lbl, note=note, date=created_at.strftime('%d/%m/%Y')))
     await post_to_channel(context,
-        f"🔔 *Thu nhập mới*\n💰 `{amount:,.0f} đ`\n📌 {source}\n📝 {note}\n📅 {created_at.strftime('%d/%m/%Y')}\n👤 `{anonymize_name(user_name)}`")
-    return await end_conv(update,context,"✅ Thu nhập đã lưu.")
+        f"🔔 *New income*\n💰 `{fmt_amount(amount,user_id)}`\n📌 {source}\n📝 {note}\n📅 {created_at.strftime('%d/%m/%Y')}\n👤 `{anonymize_name(user_name)}`")
+    return await end_conv(update,context,t('fin_saved',user_id))
 
 async def get_expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        amount=parse_finance_amount(update.message.text, update.effective_user.id)
-        if amount<=0: await update.message.reply_text("Số tiền phải > 0:"); return CHOOSING_EXPENSE_AMOUNT
-        if amount>LARGE_AMOUNT_THRESHOLD:
-            context.user_data['amount_to_confirm']=amount
-            kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Đúng vậy",callback_data="confirm_amount_yes")],
-                [InlineKeyboardButton("❌ Nhập lại",callback_data="confirm_amount_no")],
-                [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-            uid2=update.effective_user.id
-            await update.message.reply_text(t('fin_confirm_large',uid2).format(type="chi" if db_get_lang(uid2)=='vi' else "expense",amount=fmt_amount(amount,uid2)),reply_markup=kb)
-            return CONFIRM_EXPENSE_AMOUNT
-        context.user_data['amount']=amount
-        await update.message.reply_text("Nhập ghi chú cho khoản chi:"); return CHOOSING_EXPENSE_NOTE
-    except Exception: await update.message.reply_text("Không hợp lệ. Thử lại (VD: 5tr2, 100k):"); return CHOOSING_EXPENSE_AMOUNT
+    uid=update.effective_user.id
+    amount=parse_finance_amount(update.message.text, uid)
+    if amount<=0:
+        await update.message.reply_text(t('fin_amount_gt0',uid)); return CHOOSING_EXPENSE_AMOUNT
+    if amount>LARGE_AMOUNT_THRESHOLD:
+        context.user_data['amount_to_confirm']=amount
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('fin_btn_yes',uid),callback_data="confirm_amount_yes")],
+            [InlineKeyboardButton(t('fin_btn_retype',uid),callback_data="confirm_amount_no")],
+            [InlineKeyboardButton(t('fin_btn_cancel',uid),callback_data="cancel_action")]])
+        await update.message.reply_text(t('fin_confirm_large',uid).format(type=t('fin_btn_expense',uid),amount=fmt_amount(amount,uid)),reply_markup=kb)
+        return CONFIRM_EXPENSE_AMOUNT
+    context.user_data['amount']=amount
+    await update.message.reply_text(t('fin_enter_expense_note',uid)); return CHOOSING_EXPENSE_NOTE
 
 async def confirm_expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="confirm_amount_yes":
         context.user_data['amount']=context.user_data.pop('amount_to_confirm')
-        await q.edit_message_text("Đã xác nhận. Nhập ghi chú:"); return CHOOSING_EXPENSE_NOTE
+        await q.edit_message_text(t('fin_confirmed_note',uid)); return CHOOSING_EXPENSE_NOTE
     elif q.data=="confirm_amount_no":
         context.user_data.pop('amount_to_confirm',None)
-        await q.edit_message_text("Nhập lại số tiền:"); return CHOOSING_EXPENSE_AMOUNT
+        await q.edit_message_text(t('fin_retype_amount',uid)); return CHOOSING_EXPENSE_AMOUNT
     return await cancel_conversation_callback(update,context)
 
 async def get_expense_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid=update.effective_user.id; lang=db_get_lang(uid)
     context.user_data['note']=update.message.text
     if 'created_at' in context.user_data:
-        await update.message.reply_text("Chọn danh mục chi tiêu:",reply_markup=_expense_cat_kb()); return CHOOSING_EXPENSE_CATEGORY
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("Hôm nay",callback_data="date_today_expense")],
-        [InlineKeyboardButton("Ngày khác",callback_data="date_other_expense")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-    await update.message.reply_text("Giao dịch vào ngày nào?",reply_markup=kb); return CHOOSING_EXPENSE_DATE
+        await update.message.reply_text(t('fin_choose_cat',uid),reply_markup=_expense_cat_kb(lang)); return CHOOSING_EXPENSE_CATEGORY
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('fin_btn_today',uid),callback_data="date_today_expense")],
+        [InlineKeyboardButton(t('fin_btn_other_date',uid),callback_data="date_other_expense")],
+        [InlineKeyboardButton(t('fin_btn_cancel',uid),callback_data="cancel_action")]])
+    await update.message.reply_text(t('fin_choose_date',uid),reply_markup=kb); return CHOOSING_EXPENSE_DATE
 
 async def choose_expense_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id; lang=db_get_lang(uid)
     if q.data=="date_today_expense":
         context.user_data['created_at']=datetime.datetime.now()
-        await q.edit_message_text("Chọn danh mục chi tiêu:",reply_markup=_expense_cat_kb()); return CHOOSING_EXPENSE_CATEGORY
+        await q.edit_message_text(t('fin_choose_cat',uid),reply_markup=_expense_cat_kb(lang)); return CHOOSING_EXPENSE_CATEGORY
     elif q.data=="date_other_expense":
-        await q.edit_message_text("Nhập ngày (VD: 25/06/2024 hoặc 15/1):"); return CHOOSING_EXPENSE_DATE
+        await q.edit_message_text(t('fin_enter_date',uid)); return CHOOSING_EXPENSE_DATE
     return await cancel_conversation_callback(update,context)
 
 async def get_expense_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid=update.effective_user.id; lang=db_get_lang(uid)
     try:
         context.user_data['created_at']=parse_date(update.message.text)
-        await update.message.reply_text("Chọn danh mục chi tiêu:",reply_markup=_expense_cat_kb()); return CHOOSING_EXPENSE_CATEGORY
+        await update.message.reply_text(t('fin_choose_cat',uid),reply_markup=_expense_cat_kb(lang)); return CHOOSING_EXPENSE_CATEGORY
     except ValueError as e:
-        await update.message.reply_text(f"{e} Nhập lại ngày:"); return CHOOSING_EXPENSE_DATE
+        await update.message.reply_text(t('fin_invalid_date',uid).format(e=e)); return CHOOSING_EXPENSE_DATE
 
 async def get_expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q=update.callback_query; await q.answer()
@@ -3080,7 +3130,9 @@ async def get_expense_category(update: Update, context: ContextTypes.DEFAULT_TYP
     amount=context.user_data.get('amount'); note=context.user_data.get('note')
     created_at=context.user_data.get('created_at')
     db_add_expense(user_id,amount,note,category,created_at)
-    await q.edit_message_text(f"✅ Chi tiêu: {amount:,.0f} đ - {note} ({category}) ngày {created_at.strftime('%d/%m/%Y')}")
+    cat_lbl=_lbl(_EXPENSE_LABELS, category, db_get_lang(user_id))
+    await q.edit_message_text(t('fin_saved_expense',user_id).format(
+        amount=fmt_amount(amount,user_id), note=note, category=cat_lbl, date=created_at.strftime('%d/%m/%Y')))
     budgets=db_get_budgets(user_id); budget_amt=budgets.get(category)
     if budget_amt:
         m_start,m_end=get_month_range(created_at)
@@ -3097,261 +3149,248 @@ async def get_expense_category(update: Update, context: ContextTypes.DEFAULT_TYP
 # ===================== DELETE FLOW =====================
 async def handle_delete_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    submenu = context.user_data.get('submenu', 'finance')
-    if submenu == 'crypto':
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Xóa giao dịch Crypto", callback_data="delete_action_individual")],
-            [InlineKeyboardButton("Đặt lại toàn bộ Crypto", callback_data="delete_action_reset_crypto")],
-            [InlineKeyboardButton("❌ Hủy bỏ", callback_data="cancel_action")]])
-        prompt = "🗑️ Xóa dữ liệu Crypto?"
+    uid=update.effective_user.id; submenu=context.user_data.get('submenu','finance')
+    if submenu=='crypto':
+        kb=InlineKeyboardMarkup([
+            [InlineKeyboardButton(t('del_btn_del_crypto',uid),callback_data="delete_action_individual")],
+            [InlineKeyboardButton(t('del_btn_reset_crypto',uid),callback_data="delete_action_reset_crypto")],
+            [InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]])
+        prompt=t('del_crypto_q',uid)
     else:
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Xóa giao dịch", callback_data="delete_action_individual")],
-            [InlineKeyboardButton("Đặt lại toàn bộ", callback_data="delete_action_reset_all")],
-            [InlineKeyboardButton("❌ Hủy bỏ", callback_data="cancel_action")]])
-        prompt = "Bạn muốn làm gì?"
+        kb=InlineKeyboardMarkup([
+            [InlineKeyboardButton(t('del_btn_del_trade',uid),callback_data="delete_action_individual")],
+            [InlineKeyboardButton(t('del_btn_reset_all',uid),callback_data="delete_action_reset_all")],
+            [InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]])
+        prompt=t('del_finance_q',uid)
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(prompt, reply_markup=kb)
+        await update.callback_query.edit_message_text(prompt,reply_markup=kb)
     else:
-        await update.message.reply_text(prompt, reply_markup=kb)
+        await update.message.reply_text(prompt,reply_markup=kb)
     return DELETE_CHOOSING_ACTION
 
 async def choose_delete_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="delete_action_individual":
-        user_id=update.effective_user.id
         submenu=context.user_data.get('submenu','finance')
         if submenu=='crypto':
-            trades=db_crypto_get_trades(user_id)[:5]
-            if not trades: return await end_conv(update,context,"Chưa có giao dịch Crypto để xóa.")
-            msg="5 giao dịch Crypto gần nhất:\n\n"; kb=[]
-            for i,t in enumerate(trades):
-                tid,sym,_cg,side,qty,price,_fee,_note,cat_str=t
+            trades=db_crypto_get_trades(uid)[:5]
+            if not trades: return await end_conv(update,context,t('del_no_crypto',uid))
+            msg=t('del_recent_crypto',uid); kb=[]
+            for i,tr in enumerate(trades):
+                tid,sym,_cg,side,qty,price,_fee,_note,cat_str=tr
                 dt=datetime.datetime.fromisoformat(str(cat_str)).strftime('%d/%m/%Y') if cat_str else ''
                 msg+=f"*{i+1}.* [{side}] {sym} {qty} @ ${price:,.2f} - {dt}\n"
-                kb.append([InlineKeyboardButton(f"Xóa #{i+1}",callback_data=f"delete_id_{tid}_crypto")])
-            kb.append([InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")])
+                kb.append([InlineKeyboardButton(f"🗑️ #{i+1}",callback_data=f"delete_id_{tid}_crypto")])
+            kb.append([InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")])
             await q.edit_message_text(msg,reply_markup=InlineKeyboardMarkup(kb),parse_mode='Markdown')
         else:
-            txs=db_get_last_n_transactions(user_id,5)
-            if not txs: return await end_conv(update,context,"Chưa có giao dịch để xóa.")
-            msg="5 giao dịch gần nhất:\n\n"; kb=[]
-            for i,t in enumerate(txs):
-                tid,ttype,amount,note,cat,cat_str=t
-                tname="Chi tiêu" if ttype=="expense" else "Thu nhập"
+            txs=db_get_last_n_transactions(uid,5)
+            if not txs: return await end_conv(update,context,t('del_no_finance',uid))
+            msg=t('del_recent_finance',uid); kb=[]
+            for i,tr in enumerate(txs):
+                tid,ttype,amount,note,cat,cat_str=tr
+                tname=t('del_income_label',uid) if ttype=="income" else t('del_expense_label',uid)
                 dt=datetime.datetime.fromisoformat(cat_str).strftime('%d/%m/%Y')
-                msg+=f"*{i+1}.* [{tname}] {amount:,.0f} đ - `{note}` ({cat}) - {dt}\n"
-                kb.append([InlineKeyboardButton(f"Xóa mục {i+1}",callback_data=f"delete_id_{tid}_{ttype}")])
-            kb.append([InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")])
+                msg+=f"*{i+1}.* [{tname}] {fmt_amount(amount,uid)} - `{note}` ({cat}) - {dt}\n"
+                kb.append([InlineKeyboardButton(f"🗑️ {i+1}",callback_data=f"delete_id_{tid}_{ttype}")])
+            kb.append([InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")])
             await q.edit_message_text(msg,reply_markup=InlineKeyboardMarkup(kb),parse_mode='Markdown')
         return DELETE_INDIVIDUAL_LISTING
     elif q.data=="delete_action_reset_all":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Có, chắc chắn",callback_data="reset_confirm_1_yes")],
-            [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-        await q.edit_message_text("Xóa TẤT CẢ dữ liệu tài chính? Không thể hoàn tác.",reply_markup=kb)
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('del_btn_sure',uid),callback_data="reset_confirm_1_yes")],
+            [InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]])
+        await q.edit_message_text(t('del_confirm_reset_all',uid),reply_markup=kb)
         return RESET_DATA_CONFIRM_STEP1
     elif q.data=="delete_action_reset_crypto":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Có, chắc chắn",callback_data="reset_confirm_1_crypto")],
-            [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-        await q.edit_message_text("Xóa TẤT CẢ giao dịch Crypto? Không thể hoàn tác.",reply_markup=kb)
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('del_btn_sure',uid),callback_data="reset_confirm_1_crypto")],
+            [InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]])
+        await q.edit_message_text(t('del_confirm_reset_crypto',uid),reply_markup=kb)
         return RESET_DATA_CONFIRM_STEP1
     return await cancel_conversation_callback(update,context)
 
 async def delete_choose_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
     parts=q.data.split('_'); trans_id=int(parts[2]); trans_type=parts[3]
     context.user_data['id_to_delete']=trans_id; context.user_data['type_to_delete']=trans_type
     if trans_type=='crypto':
-        label=f"Crypto ID {trans_id}"
-        confirm_cb="confirm_delete_crypto_yes"
+        label=f"Crypto ID {trans_id}"; confirm_cb="confirm_delete_crypto_yes"
     else:
-        label=f"ID {trans_id} ({'Thu nhập' if trans_type=='income' else 'Chi tiêu'})"
-        confirm_cb="confirm_delete_yes"
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Xác nhận XÓA",callback_data=confirm_cb)],
-        [InlineKeyboardButton("❌ Hủy",callback_data="cancel_action")]])
-    await q.edit_message_text(f"Xóa giao dịch {label}?",reply_markup=kb)
+        tname=t('del_income_label',uid) if trans_type=='income' else t('del_expense_label',uid)
+        label=f"ID {trans_id} ({tname})"; confirm_cb="confirm_delete_yes"
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('del_btn_confirm_del',uid),callback_data=confirm_cb)],
+        [InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]])
+    await q.edit_message_text(t('del_item_q',uid).format(label=label),reply_markup=kb)
     return DELETE_INDIVIDUAL_CONFIRM
 
 async def delete_confirm_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="confirm_delete_yes":
         db_delete_transaction(context.user_data.get('id_to_delete'),context.user_data.get('type_to_delete'))
-        return await end_conv(update,context,"✅ Đã xóa giao dịch.")
+        return await end_conv(update,context,t('del_done',uid))
     elif q.data=="confirm_delete_crypto_yes":
         db_crypto_delete_trade(context.user_data.get('id_to_delete'))
-        return await end_conv(update,context,"✅ Đã xóa giao dịch Crypto.")
-    return await end_conv(update,context,"Đã hủy.")
+        return await end_conv(update,context,t('del_done_crypto',uid))
+    return await end_conv(update,context,t('del_cancelled',uid))
 
 async def reset_data_confirmation_1_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="reset_confirm_1_yes":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("🔥 XÓA TẤT CẢ",callback_data="reset_confirm_2_yes")],
-            [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-        await q.edit_message_text("Xác nhận cuối: XÓA toàn bộ dữ liệu? Không thể khôi phục.",reply_markup=kb)
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('del_btn_del_all',uid),callback_data="reset_confirm_2_yes")],
+            [InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]])
+        await q.edit_message_text(t('del_final_all',uid),reply_markup=kb)
         return RESET_DATA_CONFIRM_STEP2
     elif q.data=="reset_confirm_1_crypto":
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("🔥 XÓA TẤT CẢ CRYPTO",callback_data="reset_confirm_2_crypto")],
-            [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
-        await q.edit_message_text("Xác nhận cuối: XÓA toàn bộ Crypto? Không thể khôi phục.",reply_markup=kb)
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('del_btn_del_all_crypto',uid),callback_data="reset_confirm_2_crypto")],
+            [InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]])
+        await q.edit_message_text(t('del_final_crypto',uid),reply_markup=kb)
         return RESET_DATA_CONFIRM_STEP2
     return await cancel_conversation_callback(update,context)
 
 async def reset_data_confirmation_2_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q=update.callback_query; await q.answer()
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="reset_confirm_2_yes":
-        db_reset_all_data(q.from_user.id)
-        return await end_conv(update,context,"✅ Đã xóa toàn bộ dữ liệu tài chính.")
+        db_reset_all_data(uid)
+        return await end_conv(update,context,t('del_done_all',uid))
     elif q.data=="reset_confirm_2_crypto":
-        db_crypto_reset_all(q.from_user.id)
-        return await end_conv(update,context,"✅ Đã xóa toàn bộ dữ liệu Crypto.")
-    return await end_conv(update,context,"Đã hủy.")
+        db_crypto_reset_all(uid)
+        return await end_conv(update,context,t('del_done_all_crypto',uid))
+    return await end_conv(update,context,t('del_cancelled',uid))
 
 # ===================== REPORT & CHART FLOWS =====================
 async def report_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    kb = _initial_period_keyboard("report_period")
-    msg = "📊 *CHỌN KỲ BÁO CÁO*\nChọn khoảng thời gian:"
+    uid=update.effective_user.id; kb=_initial_period_keyboard("report_period")
+    msg=t('report_choose_period',uid)
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(msg, reply_markup=kb, parse_mode='Markdown')
+        await update.callback_query.edit_message_text(msg,reply_markup=kb,parse_mode='Markdown')
     else:
-        await update.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+        await update.message.reply_text(msg,reply_markup=kb,parse_mode='Markdown')
     return CHOOSING_REPORT_PERIOD
 
 async def generate_report_for_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q = update.callback_query; await q.answer()
-    if q.data == "cancel_action":
-        return await cancel_conversation_callback(update, context)
-    period = q.data.replace("report_period_", "")
-    # Sub-navigation: back to initial menu
-    if period == "back":
-        await q.edit_message_text("📊 *CHỌN KỲ BÁO CÁO*\nChọn khoảng thời gian:",
-                                  reply_markup=_initial_period_keyboard("report_period"), parse_mode='Markdown')
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    if q.data=="cancel_action":
+        return await cancel_conversation_callback(update,context)
+    period=q.data.replace("report_period_","")
+    if period=="back":
+        await q.edit_message_text(t('report_choose_period',uid),reply_markup=_initial_period_keyboard("report_period"),parse_mode='Markdown')
         return CHOOSING_REPORT_PERIOD
-    # Sub-navigation: show month picker
-    if period == "pick_month":
-        await q.edit_message_text("📆 Chọn tháng:", reply_markup=_month_picker_keyboard("report_period"))
+    if period=="pick_month":
+        await q.edit_message_text(t('pick_month',uid),reply_markup=_month_picker_keyboard("report_period"))
         return CHOOSING_REPORT_PERIOD
-    # Sub-navigation: show year picker
-    if period == "pick_year":
-        await q.edit_message_text("🗓️ Chọn năm:", reply_markup=_year_picker_keyboard("report_period"))
+    if period=="pick_year":
+        await q.edit_message_text(t('pick_year',uid),reply_markup=_year_picker_keyboard("report_period"))
         return CHOOSING_REPORT_PERIOD
-    # Generate report
-    user_id = q.from_user.id
-    start_date, end_date, title_suffix = get_period_dates(period)
+    start_date,end_date,title_suffix=get_period_dates(period)
     if title_suffix is None:
         return CHOOSING_REPORT_PERIOD
-    loading = await q.edit_message_text("⏳ Đang tạo báo cáo...")
-    income,expense,balance = db_get_combined_summary(user_id, start_date, end_date)
-    incomes_g  = db_list_incomes_grouped(user_id, start_date, end_date)
-    expenses_g = db_list_expenses_grouped(user_id, start_date, end_date)
-    report = (f"📋 *BÁO CÁO {title_suffix.upper()}*\n{'='*30}\n\n"
-              f"💼 *TỔNG QUAN*\n"
-              f"┃ 📈 Thu nhập: `{income:,.0f} VND`\n"
-              f"┃ 📉 Chi tiêu: `{expense:,.0f} VND`\n"
-              f"┃ 💰 Số dư: `{balance:,.0f} VND`\n\n")
+    loading=await q.edit_message_text(t('report_loading',uid))
+    income,expense,balance=db_get_combined_summary(uid,start_date,end_date)
+    incomes_g=db_list_incomes_grouped(uid,start_date,end_date)
+    expenses_g=db_list_expenses_grouped(uid,start_date,end_date)
+    report=(f"📋 *REPORT {title_suffix.upper()}*\n{'='*30}\n\n"
+            +t('report_overview',uid)
+            +t('report_income_line',uid).format(amount=fmt_amount(income,uid))
+            +t('report_expense_line',uid).format(amount=fmt_amount(expense,uid))
+            +t('report_balance_line',uid).format(amount=fmt_amount(balance,uid)))
     if incomes_g:
-        report += "💵 *CHI TIẾT THU NHẬP*\n"
-        for i,(src,tot) in enumerate(incomes_g, 1):
-            pct = (tot/income*100) if income>0 else 0
-            report += f"{i}. **{src}**: `{tot:,.0f}` ({pct:.1f}%)\n"
-        report += "\n"
-    else: report += "⚠️ *Chưa có thu nhập trong kỳ*\n\n"
+        report+=t('report_income_detail',uid)
+        for i,(src,tot) in enumerate(incomes_g,1):
+            pct=(tot/income*100) if income>0 else 0
+            src_lbl=_lbl(_INCOME_LABELS,src,db_get_lang(uid))
+            report+=f"{i}. **{src_lbl}**: `{fmt_amount(tot,uid)}` ({pct:.1f}%)\n"
+        report+="\n"
+    else: report+=t('report_no_income',uid)
     if expenses_g:
-        report += "💸 *CHI TIẾT CHI TIÊU*\n"
-        for i,(cat,tot) in enumerate(expenses_g, 1):
-            pct = (tot/expense*100) if expense>0 else 0
-            report += f"{i}. **{cat}**: `{tot:,.0f}` ({pct:.1f}%)\n"
-        report += "\n"
-    else: report += "✅ *Không có chi tiêu trong kỳ*\n\n"
-    budgets = db_get_budgets(user_id)
+        report+=t('report_expense_detail',uid)
+        for i,(cat,tot) in enumerate(expenses_g,1):
+            pct=(tot/expense*100) if expense>0 else 0
+            cat_lbl=_lbl(_EXPENSE_LABELS,cat,db_get_lang(uid))
+            report+=f"{i}. **{cat_lbl}**: `{fmt_amount(tot,uid)}` ({pct:.1f}%)\n"
+        report+="\n"
+    else: report+=t('report_no_expense',uid)
+    budgets=db_get_budgets(uid)
     if (period in ("month",) or period.startswith("m_")) and budgets and expenses_g:
-        report += "⚠️ *NGÂN SÁCH*\n"
+        report+=t('report_budget_title',uid)
         for cat,tot in expenses_g:
-            lim = budgets.get(cat)
+            lim=budgets.get(cat)
             if not lim: continue
-            ratio = tot/lim if lim>0 else 0
-            if ratio>=1.0: report += f"- {cat}: `{tot:,.0f}/{lim:,.0f}` 🚨 VƯỢT\n"
-            elif ratio>=0.9: report += f"- {cat}: `{tot:,.0f}/{lim:,.0f}` ⚠️ GẦN\n"
-        report += "\n"
-    report += ("📊 *ĐÁNH GIÁ*: Tích cực! 🎉" if balance>0 else
-               "📊 *ĐÁNH GIÁ*: Cân bằng ⚖️" if balance==0 else
-               "📊 *ĐÁNH GIÁ*: Cần cân nhắc ⚠️")
+            ratio=tot/lim if lim>0 else 0
+            if ratio>=1.0: report+=f"- {cat}: `{fmt_amount(tot,uid)}/{fmt_amount(lim,uid)}` {t('report_budget_over_lbl',uid)}\n"
+            elif ratio>=0.9: report+=f"- {cat}: `{fmt_amount(tot,uid)}/{fmt_amount(lim,uid)}` {t('report_budget_near_lbl',uid)}\n"
+        report+="\n"
+    report+=(t('report_eval_positive',uid) if balance>0 else
+             t('report_eval_balanced',uid) if balance==0 else
+             t('report_eval_negative',uid))
     await loading.delete()
-    await q.message.reply_text(report, parse_mode='Markdown')
-    return await end_conv(update, context, "✅ Báo cáo hoàn tất.")
+    await q.message.reply_text(report,parse_mode='Markdown')
+    return await end_conv(update,context,t('report_done',uid))
 
 async def chart_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    kb = _initial_period_keyboard("chart_period")
-    msg = "📊 Xem biểu đồ theo kỳ nào?"
+    uid=update.effective_user.id; kb=_initial_period_keyboard("chart_period")
+    msg=t('chart_choose_period',uid)
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(msg, reply_markup=kb)
+        await update.callback_query.edit_message_text(msg,reply_markup=kb)
     else:
-        await update.message.reply_text(msg, reply_markup=kb)
+        await update.message.reply_text(msg,reply_markup=kb)
     return CHOOSING_CHART_PERIOD
 
 async def generate_charts_for_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query; await q.answer()
     if q.data == "cancel_action":
         return await cancel_conversation_callback(update, context)
-    period = q.data.replace("chart_period_", "")
-    # Sub-navigation: back to initial menu
-    if period == "back":
-        await q.edit_message_text("📊 Xem biểu đồ theo kỳ nào?",
-                                  reply_markup=_initial_period_keyboard("chart_period"))
+    uid=q.from_user.id; period=q.data.replace("chart_period_","")
+    if period=="back":
+        await q.edit_message_text(t('chart_choose_period',uid),reply_markup=_initial_period_keyboard("chart_period"))
         return CHOOSING_CHART_PERIOD
-    # Sub-navigation: show month picker
-    if period == "pick_month":
-        await q.edit_message_text("📆 Chọn tháng:", reply_markup=_month_picker_keyboard("chart_period"))
+    if period=="pick_month":
+        await q.edit_message_text(t('pick_month',uid),reply_markup=_month_picker_keyboard("chart_period"))
         return CHOOSING_CHART_PERIOD
-    # Sub-navigation: show year picker
-    if period == "pick_year":
-        await q.edit_message_text("🗓️ Chọn năm:", reply_markup=_year_picker_keyboard("chart_period"))
+    if period=="pick_year":
+        await q.edit_message_text(t('pick_year',uid),reply_markup=_year_picker_keyboard("chart_period"))
         return CHOOSING_CHART_PERIOD
-    # Generate charts
-    user_id = q.from_user.id
-    _, _, title_suffix = get_period_dates(period)
+    _,_,title_suffix=get_period_dates(period)
     if title_suffix is None:
         return CHOOSING_CHART_PERIOD
-    msg = await q.edit_message_text(f"⏳ Đang tạo biểu đồ {title_suffix}...")
-    charts = await asyncio.to_thread(gen_finance_charts, user_id, period)
+    msg=await q.edit_message_text(t('chart_loading',uid).format(period=title_suffix))
+    charts=await asyncio.to_thread(gen_finance_charts,uid,period)
     if not charts:
         await msg.delete()
-        return await end_conv(update, context, f"Không có dữ liệu trong {title_suffix}.")
+        return await end_conv(update,context,t('chart_no_data',uid).format(period=title_suffix))
     await msg.delete()
     for buf,cap in charts:
         buf.seek(0)
-        await q.message.reply_photo(photo=buf, caption=cap)
-    return await end_conv(update, context, "✅ Biểu đồ hoàn tất.")
+        await q.message.reply_photo(photo=buf,caption=cap)
+    return await end_conv(update,context,t('chart_done',uid))
 
 # ===================== EXPORT / IMPORT FINANCE FLOWS =====================
 async def export_file_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    user_id=update.effective_user.id
-    rows=db_export_data(user_id)
+    uid=update.effective_user.id; rows=db_export_data(uid)
     if not rows:
-        return await end_conv(update,context,"⚠️ Chưa có dữ liệu để xuất.")
+        return await end_conv(update,context,t('export_no_data',uid))
     kb=InlineKeyboardMarkup([
-        [InlineKeyboardButton("Xuất ra CSV",callback_data="export_csv")],
-        [InlineKeyboardButton("Xuất ra Excel",callback_data="export_excel")],
-        [InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]
+        [InlineKeyboardButton(t('export_btn_csv',uid),callback_data="export_csv")],
+        [InlineKeyboardButton(t('export_btn_excel',uid),callback_data="export_excel")],
+        [InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]
     ])
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("Xuất dữ liệu ra định dạng nào?",reply_markup=kb)
+        await update.callback_query.edit_message_text(t('export_choose',uid),reply_markup=kb)
     else:
-        await update.message.reply_text("Xuất dữ liệu ra định dạng nào?",reply_markup=kb)
+        await update.message.reply_text(t('export_choose',uid),reply_markup=kb)
     return EXPORT_CHOOSING_FORMAT
 
 async def handle_export_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q=update.callback_query; await q.answer()
     if q.data=="cancel_action": return await cancel_conversation_callback(update,context)
-    user_id=q.from_user.id; rows=db_export_data(user_id)
-    if not rows: return await end_conv(update,context,"⚠️ Không có dữ liệu.")
-    loading=await q.edit_message_text("⏳ Đang chuẩn bị file...")
+    uid=q.from_user.id; rows=db_export_data(uid)
+    if not rows: return await end_conv(update,context,t('export_no_data2',uid))
+    loading=await q.edit_message_text(t('export_loading',uid))
     prefix=f"finance_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
     headers=['Loại','Số tiền','Ghi chú','Danh mục/Nguồn','Ngày','ID']
     if q.data=="export_csv":
@@ -3370,15 +3409,13 @@ async def handle_export_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         buf=io.BytesIO(); wb.save(buf); buf.seek(0)
         await q.message.reply_document(document=buf.getvalue(),filename=f'{prefix}.xlsx',caption="📁 Dữ liệu tài chính (Excel)")
     await loading.delete()
-    return await end_conv(update,context,"✅ Xuất file hoàn tất.")
+    return await end_conv(update,context,t('export_done',uid))
 
 async def import_file_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    msg=("📥 *NHẬP DỮ LIỆU TÀI CHÍNH*\n\n"
-         "File cần có 5 cột:\n`Loại` | `Số tiền` | `Ghi chú` | `Danh mục/Nguồn` | `Ngày`\n\n"
-         "Ví dụ:\n`Chi tiêu | 50000 | Ăn trưa | Ăn uống | 2024-07-28`\n\n"
-         "Gửi file .csv hoặc .xlsx ngay bây giờ.")
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Hủy bỏ",callback_data="cancel_action")]])
+    uid=update.effective_user.id
+    msg=t('import_hint',uid)
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton(t('del_btn_cancel',uid),callback_data="cancel_action")]])
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(msg,reply_markup=kb,parse_mode='Markdown')
@@ -3390,9 +3427,9 @@ async def handle_import_file_upload(update: Update, context: ContextTypes.DEFAUL
     user_id=update.effective_user.id; doc=update.message.document
     fname=(doc.file_name or "").lower()
     if not (fname.endswith('.csv') or fname.endswith('.xlsx')):
-        await update.message.reply_text("⚠️ Chỉ hỗ trợ .csv hoặc .xlsx. Thử lại.")
+        await update.message.reply_text(t('import_only_csv',user_id))
         return IMPORT_FILE_UPLOADED
-    await update.message.reply_text("⏳ Đang xử lý file...")
+    await update.message.reply_text(t('import_processing',user_id))
     fobj=await doc.get_file(); bio=io.BytesIO()
     await fobj.download_to_memory(bio); bio.seek(0)
     ok_income=ok_expense=fail=0
@@ -3441,10 +3478,10 @@ async def handle_import_file_upload(update: Update, context: ContextTypes.DEFAUL
                 except Exception: fail+=1
     except Exception as e:
         logger.error(f"Import error user {user_id}: {e}")
-        return await end_conv(update,context,f"❌ Lỗi xử lý file: {e}")
+        return await end_conv(update,context,t('import_file_err',user_id).format(e=e))
     total=ok_income+ok_expense
     return await end_conv(update,context,
-        f"✅ Nhập thành công {total} giao dịch:\n- {ok_income} thu nhập\n- {ok_expense} chi tiêu\n- {fail} lỗi bỏ qua")
+        t('import_done_full',user_id).format(total=total,income=ok_income,expense=ok_expense,fail=fail))
 
 # ===================== BUDGET COMMANDS =====================
 async def budget_set_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3463,14 +3500,16 @@ async def budget_set_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def budget_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id=update.effective_user.id; budgets=db_get_budgets(user_id)
-    if not budgets: await update.message.reply_text(t('budget_none', user_id)); return
+    if not budgets: await update.message.reply_text(t('budget_none',user_id)); return
     now=datetime.datetime.now(); m_start,m_end=get_month_range(now)
-    lines=["📋 *NGÂN SÁCH THÁNG NÀY*"]
+    lines=[t('budget_list_title_full',user_id)]
     for cat,lim in budgets.items():
         spent=db_sum_expense_by_category_in_period(user_id,cat,m_start,m_end)
         ratio=spent/lim if lim>0 else 0
-        status="🚨 VƯỢT" if ratio>=1.0 else ("⚠️ GẦN" if ratio>=0.9 else "✅ OK")
-        lines.append(f"- {cat}: {spent:,.0f}/{lim:,.0f} đ ({ratio*100:.0f}%)  {status}")
+        status=(t('budget_status_over',user_id) if ratio>=1.0
+                else t('budget_status_near',user_id) if ratio>=0.9
+                else t('budget_status_ok',user_id))
+        lines.append(f"- {cat}: {fmt_amount(spent,user_id)}/{fmt_amount(lim,user_id)} ({ratio*100:.0f}%)  {status}")
     await update.message.reply_text("\n".join(lines),parse_mode='Markdown')
 
 async def budget_delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3494,12 +3533,14 @@ async def unified_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if parsed_f and parsed_f["amount"]>0:
         if parsed_f["type"]=="income":
             db_add_income(user_id,parsed_f["amount"],parsed_f["category"],parsed_f["note"],parsed_f["created_at"])
-            msg=(f"✅ *Thu nhập*: `{parsed_f['amount']:,.0f} đ`\n"
-                 f"• Nguồn: *{parsed_f['category']}*\n• Ghi chú: _{parsed_f['note']}_\n• Ngày: {parsed_f['created_at'].strftime('%d/%m/%Y')}")
+            msg=t('nlp_income_saved',user_id).format(
+                amount=fmt_amount(parsed_f['amount'],user_id),cat=parsed_f['category'],
+                note=parsed_f['note'],date=parsed_f['created_at'].strftime('%d/%m/%Y'))
         else:
             db_add_expense(user_id,parsed_f["amount"],parsed_f["note"],parsed_f["category"],parsed_f["created_at"])
-            msg=(f"✅ *Chi tiêu*: `{parsed_f['amount']:,.0f} đ`\n"
-                 f"• Danh mục: *{parsed_f['category']}*\n• Ghi chú: _{parsed_f['note']}_\n• Ngày: {parsed_f['created_at'].strftime('%d/%m/%Y')}")
+            msg=t('nlp_expense_saved',user_id).format(
+                amount=fmt_amount(parsed_f['amount'],user_id),cat=parsed_f['category'],
+                note=parsed_f['note'],date=parsed_f['created_at'].strftime('%d/%m/%Y'))
             budgets=db_get_budgets(user_id); budget_amt=budgets.get(parsed_f["category"])
             if budget_amt:
                 m_start,m_end=get_month_range(parsed_f["created_at"])
@@ -3521,8 +3562,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     except Exception: err=str(context.error)
     logger.error(f"Update {update} caused error:\n{err}")
     try:
-        chat_id=update.effective_chat.id if update and hasattr(update,"effective_chat") else None
-        if chat_id: await context.bot.send_message(chat_id,"⚠️ Có lỗi xảy ra. Hãy thử lại.")
+        if update and hasattr(update,"effective_chat") and update.effective_chat:
+            uid=update.effective_user.id if update.effective_user else 0
+            await context.bot.send_message(update.effective_chat.id, t('error_generic',uid))
     except Exception: pass
 
 async def language_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3783,16 +3825,15 @@ async def recurring_list_callback(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['recur_del_id'] = rec_id
         _, _, ttype, amount, category, note, day, month, _ = row
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Xóa", callback_data="recur_del_confirm"),
-             InlineKeyboardButton("◀️ Quay lại", callback_data="recur_back_list")]])
+            [InlineKeyboardButton(t('recur_btn_del',uid), callback_data="recur_del_confirm"),
+             InlineKeyboardButton(t('recur_back',uid), callback_data="recur_back_list")]])
         await q.edit_message_text(
-            f"Xóa khoản định kỳ:\n*{note or category}* — `{amount:,.0f} đ`\nNgày {day} {_recurring_freq_str(month)}?",
+            t('recur_del_q',uid).format(label=note or category,amount=fmt_amount(amount,uid),day=day,freq=_recurring_freq_str(month)),
             reply_markup=kb, parse_mode='Markdown')
         return RECURRING_DELETE_CONFIRM
     elif q.data == "recur_back_list":
         items = db_recurring_list(uid)
-        msg = (f"🔁 *Giao dịch định kỳ* ({len(items)} khoản):"
-               if items else "🔁 *Giao dịch định kỳ*\nChưa có khoản nào.")
+        msg=t('recur_title',uid).format(n=len(items)) if items else t('recur_empty',uid)
         await q.edit_message_text(msg, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
         return RECURRING_LIST
     return RECURRING_LIST
@@ -3800,47 +3841,50 @@ async def recurring_list_callback(update: Update, context: ContextTypes.DEFAULT_
 # ── Add flow ─────────────────────────────────────────────
 
 async def recurring_pick_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q = update.callback_query; await q.answer()
+    q = update.callback_query; await q.answer(); uid=q.from_user.id
     context.user_data['recur_ttype'] = q.data.replace("recur_type_", "")
-    await q.edit_message_text("💰 Nhập số tiền (VD: 250k, 1.5tr, 200000):")
+    await q.edit_message_text(t('recur_add_amount',uid))
     return RECURRING_ADD_AMOUNT
 
 async def recurring_get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid = update.effective_user.id
+    uid = update.effective_user.id; lang=db_get_lang(uid)
     amount = parse_finance_amount(update.message.text, uid)
     if not amount or amount <= 0:
-        await update.message.reply_text("⚠️ Số tiền không hợp lệ. Nhập lại (VD: 250k):"); return RECURRING_ADD_AMOUNT
+        await update.message.reply_text(t('recur_invalid_amt',uid)); return RECURRING_ADD_AMOUNT
     context.user_data['recur_amount'] = amount
     if context.user_data.get('recur_ttype') == 'income':
-        await update.message.reply_text("📌 Chọn nguồn thu nhập:", reply_markup=_income_source_kb())
+        await update.message.reply_text(t('recur_pick_income',uid), reply_markup=_income_source_kb(lang))
     else:
-        await update.message.reply_text("📌 Chọn danh mục chi tiêu:", reply_markup=_expense_cat_kb())
+        await update.message.reply_text(t('recur_pick_cat',uid), reply_markup=_expense_cat_kb(lang))
     return RECURRING_ADD_CATEGORY
 
 async def recurring_get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q = update.callback_query; await q.answer()
+    q = update.callback_query; await q.answer(); uid=q.from_user.id
     cat = q.data.replace("income_source_", "").replace("expense_category_", "")
     context.user_data['recur_category'] = cat
-    await q.edit_message_text("📝 Nhập ghi chú (VD: Hóa đơn VNPT), hoặc gõ `-` để bỏ qua:")
+    await q.edit_message_text(t('fin_enter_note',uid))
     return RECURRING_ADD_NOTE
 
 async def recurring_get_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid=update.effective_user.id
     txt = update.message.text.strip()
     context.user_data['recur_note'] = '' if txt == '-' else txt
-    await update.message.reply_text("📅 Ngày mấy trong tháng sẽ tự ghi? Nhập số (1–28):")
+    await update.message.reply_text(t('recur_pick_day',uid))
     return RECURRING_ADD_DAY
 
 async def recurring_get_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid=update.effective_user.id
     try:
         day = int(update.message.text.strip())
         if not 1 <= day <= 28: raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Nhập số từ 1 đến 28:"); return RECURRING_ADD_DAY
+        await update.message.reply_text(t('recur_invalid_day',uid)); return RECURRING_ADD_DAY
     context.user_data['recur_day'] = day
+    uid=update.effective_user.id
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📅 Hàng tháng", callback_data="recur_freq_monthly"),
-         InlineKeyboardButton("📆 Hàng năm",   callback_data="recur_freq_yearly")]])
-    await update.message.reply_text(f"Lặp lại như thế nào?", reply_markup=kb)
+        [InlineKeyboardButton(t('recur_monthly',uid), callback_data="recur_freq_monthly"),
+         InlineKeyboardButton(t('recur_yearly',uid),  callback_data="recur_freq_yearly")]])
+    await update.message.reply_text(t('recur_pick_freq',uid), reply_markup=kb)
     return RECURRING_ADD_FREQ
 
 async def recurring_pick_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -3852,7 +3896,8 @@ async def recurring_pick_freq(update: Update, context: ContextTypes.DEFAULT_TYPE
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(m, callback_data=f"recur_month_{i+1}")
                                 for i, m in enumerate(row, start=ri*4)]
                                for ri, row in enumerate([months[i:i+4] for i in range(0,12,4)])])
-    await q.edit_message_text("Hàng năm vào tháng nào?", reply_markup=kb)
+    uid=q.from_user.id
+    await q.edit_message_text(t('recur_add_month',uid), reply_markup=kb)
     return RECURRING_ADD_MONTH
 
 async def recurring_pick_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -3866,13 +3911,13 @@ async def _recurring_save_new(q, context) -> int:
                      d.get('recur_note', ''), d['recur_day'], d.get('recur_month'))
     freq = _recurring_freq_str(d.get('recur_month'))
     icon = "💰" if d['recur_ttype'] == 'income' else "💸"
-    saved = (f"✅ *Đã thêm khoản định kỳ*\n"
-             f"{icon} `{d['recur_amount']:,.0f} đ` — {d['recur_category']}\n"
+    saved = (f"{t('recur_saved',uid)}\n"
+             f"{icon} `{fmt_amount(d['recur_amount'],uid)}` — {d['recur_category']}\n"
              f"📝 {d.get('recur_note') or '—'}\n"
-             f"📅 Ngày {d['recur_day']} {freq}")
+             f"📅 {freq}")
     items = db_recurring_list(uid)
     try:
-        await q.edit_message_text(saved + f"\n\n🔁 *Danh sách ({len(items)} khoản):*",
+        await q.edit_message_text(saved+f"\n\n"+t('recur_title',uid).format(n=len(items)),
                                   reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
     except Exception:
         await q.message.reply_text(saved, parse_mode='Markdown')
@@ -3885,10 +3930,12 @@ async def recurring_delete_confirm(update: Update, context: ContextTypes.DEFAULT
     if q.data == "recur_del_confirm":
         db_recurring_delete(context.user_data.get('recur_del_id', 0))
     items = db_recurring_list(uid)
-    msg = (f"✅ Đã xóa.\n\n🔁 *Danh sách ({len(items)} khoản):*"
-           if q.data == "recur_del_confirm" else
-           f"🔁 *Giao dịch định kỳ* ({len(items)} khoản):" if items else
-           "🔁 *Giao dịch định kỳ*\nChưa có khoản nào.")
+    if q.data == "recur_del_confirm":
+        msg=t('del_done',uid)+"\n\n"+t('recur_title',uid).format(n=len(items))
+    elif items:
+        msg=t('recur_title',uid).format(n=len(items))
+    else:
+        msg=t('recur_empty',uid)
     await q.edit_message_text(msg, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
     return RECURRING_LIST
 
@@ -3948,8 +3995,9 @@ async def recurring_edit_value(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             info = ""
         items = db_recurring_list(uid)
+        title=t('recur_title',uid).format(n=len(items))
         await q.edit_message_text(
-            (info + f"\n\n🔁 *Danh sách ({len(items)} khoản):*") if info else f"🔁 *Danh sách ({len(items)} khoản):*",
+            (info+"\n\n"+title) if info else title,
             reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
         return RECURRING_LIST
 
@@ -3958,28 +4006,28 @@ async def recurring_edit_value(update: Update, context: ContextTypes.DEFAULT_TYP
     if field == 'amount':
         new_amount = parse_finance_amount(text, uid)
         if not new_amount or new_amount <= 0:
-            await update.message.reply_text("⚠️ Số tiền không hợp lệ. Nhập lại:"); return RECURRING_EDIT_VALUE
+            await update.message.reply_text(t('recur_invalid_amt',uid)); return RECURRING_EDIT_VALUE
         db_recurring_update(rec_id, new_amount, category, note, day, month)
         await update.message.reply_text(t('recur_updated_amt',uid).format(amount=fmt_amount(new_amount,uid)), parse_mode='Markdown')
     elif field == 'note':
         new_note = '' if text == '-' else text
         db_recurring_update(rec_id, amount, category, new_note, day, month)
-        await update.message.reply_text(f"✅ Đã cập nhật ghi chú → *{new_note or '—'}*", parse_mode='Markdown')
+        await update.message.reply_text(t('recur_updated_note',uid).format(note=new_note or '—'), parse_mode='Markdown')
     elif field == 'schedule':
         try:
             new_day = int(text)
             if not 1 <= new_day <= 28: raise ValueError
         except ValueError:
-            await update.message.reply_text("⚠️ Nhập số từ 1 đến 28:"); return RECURRING_EDIT_VALUE
+            await update.message.reply_text(t('recur_invalid_day',uid)); return RECURRING_EDIT_VALUE
         context.user_data['recur_edit_new_day'] = new_day
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📅 Hàng tháng", callback_data="recur_freq_monthly"),
-             InlineKeyboardButton("📆 Hàng năm",   callback_data="recur_freq_yearly")]])
-        await update.message.reply_text(f"Ngày {new_day} — tần suất?", reply_markup=kb)
+            [InlineKeyboardButton(t('recur_monthly',uid), callback_data="recur_freq_monthly"),
+             InlineKeyboardButton(t('recur_yearly',uid),  callback_data="recur_freq_yearly")]])
+        await update.message.reply_text(t('recur_pick_day2',uid).format(day=new_day), reply_markup=kb)
         return RECURRING_EDIT_VALUE
     items = db_recurring_list(uid)
     await update.message.reply_text(
-        f"🔁 *Danh sách ({len(items)} khoản):*",
+        t('recur_title',uid).format(n=len(items)),
         reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
     return RECURRING_LIST
 
