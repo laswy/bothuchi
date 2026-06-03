@@ -51,8 +51,17 @@ logger = logging.getLogger(__name__)
 # ===================== CONFIG =====================
 BOT_TOKEN        = os.environ["TELEGRAM_BOT_TOKEN"]
 DB_PATH          = os.environ.get("UNIVER_DB_PATH", "univer_all_in_one.db")
-HTML_PORT        = int(os.environ.get("HTML_PORT", "8080"))
-DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET", "")  # nếu đặt, URL cần ?token=xxx
+DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET", "")
+
+# Webhook config (để trống = dùng polling)
+WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "").rstrip("/")   # vd: https://mybot.up.railway.app
+WEBHOOK_PORT   = int(os.environ.get("WEBHOOK_PORT") or os.environ.get("PORT") or "8443")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+
+# Dashboard port — tránh trùng với webhook port
+_default_html = 8080 if WEBHOOK_PORT != 8080 else 8081
+HTML_PORT = int(os.environ.get("HTML_PORT", str(_default_html)))
+
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 
 OWNER_USER_ID   = 679130099
@@ -502,6 +511,63 @@ def db_get_expenses_list(user_id: int, limit: int = 50):
         rows = cur.fetchall(); conn.close(); return rows
     except Exception:
         return []
+
+
+def db_get_incomes_filtered(user_id: int, date_from=None, date_to=None,
+                             category=None, search=None, limit: int = 500):
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        sql = "SELECT id,amount,COALESCE(source,''),COALESCE(note,''),created_at FROM incomes WHERE user_id=?"
+        params: list = [user_id]
+        if date_from:
+            sql += " AND created_at >= ?"; params.append(date_from)
+        if date_to:
+            sql += " AND created_at <= ?"; params.append(date_to + " 23:59:59")
+        if category:
+            sql += " AND LOWER(source) LIKE ?"; params.append(f"%{category.lower()}%")
+        if search:
+            sql += " AND (LOWER(note) LIKE ? OR LOWER(source) LIKE ?)"; params += [f"%{search.lower()}%", f"%{search.lower()}%"]
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        cur.execute(sql, params)
+        rows = cur.fetchall(); conn.close(); return rows
+    except Exception:
+        return []
+
+
+def db_get_expenses_filtered(user_id: int, date_from=None, date_to=None,
+                              category=None, search=None, limit: int = 500):
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        sql = "SELECT id,amount,COALESCE(category,''),COALESCE(note,''),created_at FROM expenses WHERE user_id=?"
+        params: list = [user_id]
+        if date_from:
+            sql += " AND created_at >= ?"; params.append(date_from)
+        if date_to:
+            sql += " AND created_at <= ?"; params.append(date_to + " 23:59:59")
+        if category:
+            sql += " AND LOWER(category) LIKE ?"; params.append(f"%{category.lower()}%")
+        if search:
+            sql += " AND (LOWER(note) LIKE ? OR LOWER(category) LIKE ?)"; params += [f"%{search.lower()}%", f"%{search.lower()}%"]
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        cur.execute(sql, params)
+        rows = cur.fetchall(); conn.close(); return rows
+    except Exception:
+        return []
+
+
+def db_get_finance_categories(user_id: int):
+    try:
+        conn = db_conn(); cur = conn.cursor()
+        cur.execute("SELECT DISTINCT source FROM incomes WHERE user_id=? AND source IS NOT NULL AND source!='' ORDER BY source", (user_id,))
+        inc_cats = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT DISTINCT category FROM expenses WHERE user_id=? AND category IS NOT NULL AND category!='' ORDER BY category", (user_id,))
+        exp_cats = [r[0] for r in cur.fetchall()]
+        conn.close()
+        return {"income": inc_cats, "expense": exp_cats}
+    except Exception:
+        return {"income": [], "expense": []}
 
 
 # ── Recurring transactions DB ──────────────────────────
@@ -1337,84 +1403,8 @@ def _make_html(user_id=None) -> str:  # noqa: C901
         except Exception as ex:
             finance_html = f"<div class='card'><p style='color:#ff4757'>L&#x1ED7;i: {ex}</p></div>"
 
-        # ── Income list ──────────────────────────────
-        try:
-            income_list = db_get_incomes_list(user_id, 50)
-            inc_rows = ""
-            for row in income_list:
-                iid, amt, source, note, cat = row
-                dt = str(cat or "")[:10]
-                safe_src  = str(source or "").replace("'", "&#39;").replace('"', "&quot;")
-                safe_note = str(note or "").replace("'", "&#39;").replace('"', "&quot;")
-                inc_rows += (
-                    f"<tr>"
-                    f"<td>{dt}</td>"
-                    f"<td>{safe_src}</td>"
-                    f"<td>{safe_note}</td>"
-                    f"<td class='amount green'>{amt:,.0f} &#x111;</td>"
-                    f"<td style='white-space:nowrap'>"
-                    f"<button class='btn-sm' onclick=\"openEdit('income',{{id:{iid},amount:{amt},cat:'{safe_src}',note:'{safe_note}',date:'{dt}'}})\">&#x270F;&#xFE0F;</button> "
-                    f"<button class='btn-del' onclick=\"deleteFinance({iid},'income')\">&#x1F5D1;&#xFE0F;</button>"
-                    f"</td></tr>"
-                )
-        except Exception as ex:
-            inc_rows = f"<tr><td colspan='5' class='empty'>L&#x1ED7;i: {ex}</td></tr>"
-
-        income_list_html = f"""
-        <div class="card">
-          <div class="card-hdr">
-            <h2>&#x1F4B0; Thu Nh&#x1EAD;p G&#x1EA7;n &#x110;&#xE2;y</h2>
-            <div class="btns">
-              <button class="btn-pri" onclick="openAddFinance('income')">&#x2795; Th&#xEA;m</button>
-              <button class="btn-sec" onclick="exportData('finance','csv')">&#x2B07;&#xFE0F; CSV</button>
-              <button class="btn-sec" onclick="exportData('finance','excel')">&#x2B07;&#xFE0F; Excel</button>
-              <label class="btn-sec" style="cursor:pointer">&#x2B06;&#xFE0F; Nh&#x1EAD;p file
-                <input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('finance',this)">
-              </label>
-            </div>
-          </div>
-          <div style="overflow-x:auto">
-          <table><thead><tr><th>Ng&#xE0;y</th><th>Ngu&#x1ED3;n</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>Thao t&#xE1;c</th></tr></thead>
-          <tbody>{inc_rows or '<tr><td colspan="5" class="empty">Ch&#432;a c&#243; thu nh&#x1EAD;p</td></tr>'}</tbody></table>
-          </div>
-        </div>"""
-
-        # ── Expense list ─────────────────────────────
-        try:
-            expense_list = db_get_expenses_list(user_id, 50)
-            exp_rows = ""
-            for row in expense_list:
-                eid, amt, category, note, cat = row
-                dt = str(cat or "")[:10]
-                safe_cat  = str(category or "").replace("'", "&#39;").replace('"', "&quot;")
-                safe_note = str(note or "").replace("'", "&#39;").replace('"', "&quot;")
-                exp_rows += (
-                    f"<tr>"
-                    f"<td>{dt}</td>"
-                    f"<td>{safe_cat}</td>"
-                    f"<td>{safe_note}</td>"
-                    f"<td class='amount red'>{amt:,.0f} &#x111;</td>"
-                    f"<td style='white-space:nowrap'>"
-                    f"<button class='btn-sm' onclick=\"openEdit('expense',{{id:{eid},amount:{amt},cat:'{safe_cat}',note:'{safe_note}',date:'{dt}'}})\">&#x270F;&#xFE0F;</button> "
-                    f"<button class='btn-del' onclick=\"deleteFinance({eid},'expense')\">&#x1F5D1;&#xFE0F;</button>"
-                    f"</td></tr>"
-                )
-        except Exception as ex:
-            exp_rows = f"<tr><td colspan='5' class='empty'>L&#x1ED7;i: {ex}</td></tr>"
-
-        expense_list_html = f"""
-        <div class="card">
-          <div class="card-hdr">
-            <h2>&#x1F4B8; Chi Ti&#xEA;u G&#x1EA7;n &#x110;&#xE2;y</h2>
-            <div class="btns">
-              <button class="btn-pri" onclick="openAddFinance('expense')">&#x2795; Th&#xEA;m</button>
-            </div>
-          </div>
-          <div style="overflow-x:auto">
-          <table><thead><tr><th>Ng&#xE0;y</th><th>Danh m&#x1EE5;c</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>Thao t&#xE1;c</th></tr></thead>
-          <tbody>{exp_rows or '<tr><td colspan="5" class="empty">Ch&#432;a c&#243; chi ti&#xEA;u</td></tr>'}</tbody></table>
-          </div>
-        </div>"""
+        income_list_html = ""
+        expense_list_html = ""
 
     # ── Assemble HTML ────────────────────────────────
     return f"""<!DOCTYPE html>
@@ -1468,23 +1458,100 @@ footer{{text-align:center;color:#535c68;margin-top:20px;font-size:.78em;padding-
 label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
 .finput{{width:100%;margin-top:4px;background:#0f1730;color:#e8e8e8;border:1px solid #2a2a3e;padding:8px;border-radius:6px;font-size:.9em}}
 .finput:focus{{outline:none;border-color:#00d4ff}}
+.filter-bar{{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:14px;padding:14px;background:#0f1730;border-radius:8px;border:1px solid #2a2a3e}}
+.filter-bar .fgroup{{display:flex;flex-direction:column;gap:4px;min-width:110px}}
+.filter-bar .fgroup label{{margin:0;font-size:.78em;color:#94a3b8}}
+.filter-bar input,.filter-bar select{{background:#151932;color:#e8e8e8;border:1px solid #2a3a5e;padding:6px 8px;border-radius:5px;font-size:.84em}}
+.filter-bar input:focus,.filter-bar select:focus{{outline:none;border-color:#00d4ff}}
+.quick-btns{{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}}
+.qbtn{{background:#16213e;color:#94a3b8;border:1px solid #2a3a5e;padding:5px 12px;border-radius:20px;cursor:pointer;font-size:.82em;transition:all .15s}}
+.qbtn:hover,.qbtn.active{{background:#00d4ff;color:#0a0e27;border-color:#00d4ff;font-weight:600}}
+.tbl-footer{{display:flex;justify-content:space-between;align-items:center;padding:10px 0 0;border-top:1px solid #2a2a3e;margin-top:6px;font-size:.88em;color:#94a3b8}}
+.tbl-footer .total-val{{font-size:1em;font-weight:700}}
 @media(max-width:768px){{
   .two-col{{grid-template-columns:1fr}}
   .period-tabs{{grid-template-columns:1fr 1fr}}
   .chart-full{{height:220px}}
   .card-hdr{{flex-direction:column;align-items:flex-start;gap:10px}}
+  .filter-bar{{flex-direction:column}}
+  .filter-bar .fgroup{{width:100%}}
+  #financeTables{{grid-template-columns:1fr!important}}
 }}
 </style>
 </head>
 <body>
 <h1>&#x1F916; Univer Bot Dashboard</h1>
 <div class="subtitle">{uid_note} &middot; C&#x1EAD;p nh&#x1EAD;t: {ts}</div>
+<div style="text-align:center;margin-bottom:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+  <button class="btn-sec" onclick="downloadDB()" style="font-size:.82em">&#x1F4BE; T&#x1EA3;i xu&#x1ED1;ng DB</button>
+  <label class="btn-sec" style="cursor:pointer;font-size:.82em">&#x2B06;&#xFE0F; Upload DB (ghi &#x111;&#xE8;)
+    <input type="file" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadDB(this)">
+  </label>
+</div>
 
 {crypto_summary_html}
 {crypto_trades_html}
 {finance_html}
-{income_list_html}
-{expense_list_html}
+
+<!-- Finance filter + tables (dynamic) -->
+<div class="card" id="financeSection">
+  <div class="card-hdr">
+    <h2>&#x1F4CA; L&#x1ECD;c Thu Chi</h2>
+    <div class="btns">
+      <button class="btn-pri" onclick="openAddFinance('income')">&#x2795; Thu nh&#x1EAD;p</button>
+      <button class="btn-pri" style="background:#ff4757" onclick="openAddFinance('expense')">&#x2795; Chi ti&#xEA;u</button>
+      <button class="btn-sec" onclick="exportData('finance','csv')">&#x2B07;&#xFE0F; CSV</button>
+      <button class="btn-sec" onclick="exportData('finance','excel')">&#x2B07;&#xFE0F; Excel</button>
+      <label class="btn-sec" style="cursor:pointer">&#x2B06;&#xFE0F; Nh&#x1EAD;p file<input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('finance',this)"></label>
+    </div>
+  </div>
+
+  <div class="quick-btns">
+    <button class="qbtn" onclick="setQuick('thismonth')">Th&#xE1;ng n&#xE0;y</button>
+    <button class="qbtn" onclick="setQuick('lastmonth')">Th&#xE1;ng tr&#432;&#x1EDB;c</button>
+    <button class="qbtn" onclick="setQuick('thisquarter')">Qu&#xFD; n&#xE0;y</button>
+    <button class="qbtn" onclick="setQuick('thisyear')">N&#x103;m nay</button>
+    <button class="qbtn" onclick="setQuick('lastyear')">N&#x103;m ngo&#xE1;i</button>
+    <button class="qbtn" onclick="setQuick('all')">T&#x1EA5;t c&#x1EA3;</button>
+  </div>
+
+  <div class="filter-bar">
+    <div class="fgroup"><label>T&#x1EEB; ng&#xE0;y</label><input type="date" id="fDateFrom"></div>
+    <div class="fgroup"><label>&#x110;&#x1EBF;n ng&#xE0;y</label><input type="date" id="fDateTo"></div>
+    <div class="fgroup" style="min-width:150px"><label>Ngu&#x1ED3;n thu nh&#x1EAD;p</label>
+      <select id="fIncCat"><option value="">-- T&#x1EA5;t c&#x1EA3; --</option></select></div>
+    <div class="fgroup" style="min-width:150px"><label>Danh m&#x1EE5;c chi ti&#xEA;u</label>
+      <select id="fExpCat"><option value="">-- T&#x1EA5;t c&#x1EA3; --</option></select></div>
+    <div class="fgroup" style="min-width:160px"><label>T&#xEC;m ki&#x1EBF;m</label>
+      <input type="text" id="fSearch" placeholder="Ghi ch&#xFA;, ngu&#x1ED3;n..." onkeydown="if(event.key==='Enter')applyFilter()"></div>
+    <div class="fgroup" style="justify-content:flex-end;padding-top:16px">
+      <button class="btn-pri" onclick="applyFilter()" style="padding:6px 16px">&#x1F50D; L&#x1ECD;c</button>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px" id="financeTables">
+    <div>
+      <h3 class="sub-h">&#x1F4B0; Thu Nh&#x1EAD;p</h3>
+      <div style="overflow-x:auto">
+        <table><thead><tr><th>Ng&#xE0;y</th><th>Ngu&#x1ED3;n</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th></th></tr></thead>
+        <tbody id="incTbody"><tr><td colspan="5" class="empty">&#x26A1; &#x110;ang t&#x1EA3;i...</td></tr></tbody></table>
+      </div>
+      <div class="tbl-footer"><span id="incCount">0 kho&#x1EA3;n</span><span class="total-val green" id="incTotal">0 &#x111;</span></div>
+    </div>
+    <div>
+      <h3 class="sub-h">&#x1F4B8; Chi Ti&#xEA;u</h3>
+      <div style="overflow-x:auto">
+        <table><thead><tr><th>Ng&#xE0;y</th><th>Danh m&#x1EE5;c</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th></th></tr></thead>
+        <tbody id="expTbody"><tr><td colspan="5" class="empty">&#x26A1; &#x110;ang t&#x1EA3;i...</td></tr></tbody></table>
+      </div>
+      <div class="tbl-footer"><span id="expCount">0 kho&#x1EA3;n</span><span class="total-val red" id="expTotal">0 &#x111;</span></div>
+    </div>
+  </div>
+  <div class="tbl-footer" style="margin-top:14px;border-top:2px solid #00d4ff;padding-top:12px">
+    <span style="color:#e8e8e8;font-weight:600">C&#xE2;n &#x111;&#x1ED1;i</span>
+    <span class="total-val" id="netTotal" style="color:#00d4ff">0 &#x111;</span>
+  </div>
+</div>
 
 <footer>Univer All-in-One Bot &middot; Port {HTML_PORT}</footer>
 
@@ -1664,8 +1731,11 @@ async function submitModal(){{
         note:v('f_note'),date:v('f_date')
       }});
     }}
-    if(r.ok){{closeModal();location.reload();}}
-    else alert('Lỗi: '+(r.error||'unknown'));
+    if(r.ok){{
+      closeModal();
+      if(s.scope==='crypto'||s.scope==='crypto_edit') location.reload();
+      else applyFilter();
+    }}else alert('Lỗi: '+(r.error||'unknown'));
   }}catch(e){{alert('Lỗi: '+e);}}
 }}
 
@@ -1678,7 +1748,7 @@ async function deleteCrypto(id){{
 async function deleteFinance(id,ttype){{
   if(!confirm('X\xf3a giao dịch n\xe0y?')) return;
   const r=await api('/api/finance/delete',{{id,ttype}});
-  if(r.ok) location.reload(); else alert('Lỗi: '+r.error);
+  if(r.ok) applyFilter(); else alert('Lỗi: '+r.error);
 }}
 
 function v(id){{const el=document.getElementById(id);return el?el.value:'';}}
@@ -1686,6 +1756,146 @@ function v(id){{const el=document.getElementById(id);return el?el.value:'';}}
 document.getElementById('modal').addEventListener('click',function(e){{
   if(e.target===this) closeModal();
 }});
+
+// ── Finance filter ────────────────────────────────────
+const fmtVND=n=>n.toLocaleString('vi-VN')+'₫';
+
+function isoToday(){{return new Date().toISOString().slice(0,10);}}
+function isoDate(d){{return d.toISOString().slice(0,10);}}
+
+function setQuick(period){{
+  document.querySelectorAll('.qbtn').forEach(b=>b.classList.remove('active'));
+  event.target.classList.add('active');
+  const now=new Date();
+  let from,to;
+  if(period==='thismonth'){{
+    from=new Date(now.getFullYear(),now.getMonth(),1);
+    to=new Date(now.getFullYear(),now.getMonth()+1,0);
+  }}else if(period==='lastmonth'){{
+    from=new Date(now.getFullYear(),now.getMonth()-1,1);
+    to=new Date(now.getFullYear(),now.getMonth(),0);
+  }}else if(period==='thisquarter'){{
+    const q=Math.floor(now.getMonth()/3);
+    from=new Date(now.getFullYear(),q*3,1);
+    to=new Date(now.getFullYear(),q*3+3,0);
+  }}else if(period==='thisyear'){{
+    from=new Date(now.getFullYear(),0,1);
+    to=new Date(now.getFullYear(),11,31);
+  }}else if(period==='lastyear'){{
+    from=new Date(now.getFullYear()-1,0,1);
+    to=new Date(now.getFullYear()-1,11,31);
+  }}else{{
+    document.getElementById('fDateFrom').value='';
+    document.getElementById('fDateTo').value='';
+    applyFilter(); return;
+  }}
+  document.getElementById('fDateFrom').value=isoDate(from);
+  document.getElementById('fDateTo').value=isoDate(to);
+  applyFilter();
+}}
+
+async function loadCategories(){{
+  try{{
+    const r=await fetch(`/api/finance/categories?user_id=${{UID}}&token=${{TOK}}`);
+    const d=await r.json();
+    const incSel=document.getElementById('fIncCat');
+    const expSel=document.getElementById('fExpCat');
+    (d.income||[]).forEach(c=>{{const o=document.createElement('option');o.value=c;o.textContent=c;incSel.appendChild(o);}});
+    (d.expense||[]).forEach(c=>{{const o=document.createElement('option');o.value=c;o.textContent=c;expSel.appendChild(o);}});
+  }}catch(e){{}}
+}}
+
+async function applyFilter(){{
+  const from=v('fDateFrom');
+  const to=v('fDateTo');
+  const incCat=v('fIncCat');
+  const expCat=v('fExpCat');
+  const search=v('fSearch');
+
+  const qInc=new URLSearchParams({{user_id:UID,token:TOK,ttype:'income',date_from:from,date_to:to,category:incCat,search,limit:500}});
+  const qExp=new URLSearchParams({{user_id:UID,token:TOK,ttype:'expense',date_from:from,date_to:to,category:expCat,search,limit:500}});
+
+  document.getElementById('incTbody').innerHTML='<tr><td colspan="5" class="empty">Đang tải...</td></tr>';
+  document.getElementById('expTbody').innerHTML='<tr><td colspan="5" class="empty">Đang tải...</td></tr>';
+
+  const [rInc,rExp]=await Promise.all([
+    fetch(`/api/finance/list?${{qInc}}`).then(r=>r.json()),
+    fetch(`/api/finance/list?${{qExp}}`).then(r=>r.json())
+  ]);
+
+  renderTable('incTbody',rInc.income||[],'income');
+  renderTable('expTbody',rExp.expense||[],'expense');
+
+  const incT=rInc.income_total||0;
+  const expT=rExp.expense_total||0;
+  const net=incT-expT;
+  document.getElementById('incCount').textContent=(rInc.income||[]).length+' khoản';
+  document.getElementById('expCount').textContent=(rExp.expense||[]).length+' khoản';
+  document.getElementById('incTotal').textContent=fmtVND(incT);
+  document.getElementById('expTotal').textContent=fmtVND(expT);
+  const netEl=document.getElementById('netTotal');
+  netEl.textContent=(net>=0?'+':'')+fmtVND(net);
+  netEl.style.color=net>=0?'#00ff88':'#ff4757';
+}}
+
+function renderTable(tbodyId,rows,ttype){{
+  const tb=document.getElementById(tbodyId);
+  if(!rows.length){{tb.innerHTML='<tr><td colspan="5" class="empty">Không có dữ liệu</td></tr>';return;}}
+  const colorCls=ttype==='income'?'green':'red';
+  tb.innerHTML=rows.map(r=>{{
+    const safeC=(r.cat||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;");
+    const safeN=(r.note||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;");
+    return `<tr>
+      <td>${{r.date}}</td>
+      <td>${{safeC}}</td>
+      <td>${{safeN}}</td>
+      <td class="amount ${{colorCls}}">${{r.amount.toLocaleString('vi-VN')}} ₫</td>
+      <td style="white-space:nowrap">
+        <button class="btn-sm" onclick="openEdit('${{ttype}}',{{id:${{r.id}},amount:${{r.amount}},cat:'${{safeC}}',note:'${{safeN}}',date:'${{r.date}}'}})">✏️</button>
+        <button class="btn-del" onclick="deleteFinanceR(${{r.id}},'${{ttype}}')">🗑️</button>
+      </td></tr>`;
+  }}).join('');
+}}
+
+async function deleteFinanceR(id,ttype){{
+  if(!confirm('Xóa giao dịch này?')) return;
+  const r=await api('/api/finance/delete',{{id,ttype}});
+  if(r.ok) applyFilter(); else alert('Lỗi: '+r.error);
+}}
+
+// ── DB backup / restore ──────────────────────────────
+function downloadDB(){{
+  window.location.href=`/api/db/download?user_id=${{UID}}&token=${{TOK}}`;
+}}
+
+function uploadDB(input){{
+  const file=input.files[0]; if(!file) return;
+  if(!confirm(`Ghi đè toàn bộ dữ liệu bằng file "${{file.name}}"?\nHành động này không thể hoàn tác!`)) return;
+  const reader=new FileReader();
+  reader.onload=async e=>{{
+    const bytes=new Uint8Array(e.target.result);
+    let bin=''; bytes.forEach(b=>bin+=String.fromCharCode(b));
+    const b64=btoa(bin);
+    try{{
+      const r=await api('/api/db/upload',{{data:b64}});
+      if(r.ok){{ alert('Upload thành công! Trang sẽ tải lại.'); location.reload(); }}
+      else alert('Lỗi: '+(r.error||'unknown'));
+    }}catch(e){{ alert('Lỗi: '+e); }}
+  }};
+  reader.readAsArrayBuffer(file);
+  input.value='';
+}}
+
+// init
+loadCategories();
+// default: this month
+(function(){{
+  const now=new Date();
+  document.getElementById('fDateFrom').value=isoDate(new Date(now.getFullYear(),now.getMonth(),1));
+  document.getElementById('fDateTo').value=isoDate(new Date(now.getFullYear(),now.getMonth()+1,0));
+  document.querySelector('.qbtn').classList.add('active');
+  applyFilter();
+}})();
 </script>
 </body>
 </html>"""
@@ -1740,6 +1950,12 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         uid = self._uid(qs)
         if parsed.path == "/api/export":
             self._handle_export(uid, qs); return
+        if parsed.path == "/api/finance/list":
+            self._api_finance_list(uid, qs); return
+        if parsed.path == "/api/finance/categories":
+            self._send_json(db_get_finance_categories(uid) if uid else {"income":[],"expense":[]}); return
+        if parsed.path == "/api/db/download":
+            self._handle_db_download(); return
         html = _make_html(uid).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1775,10 +1991,34 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 self._api_finance_update(body)
             elif path == "/api/import":
                 self._api_import(uid, body); return
+            elif path == "/api/db/upload":
+                self._handle_db_upload(body); return
             else:
                 self._send_json({"error": "unknown path"}, 404)
         except Exception as exc:
             self._send_json({"error": str(exc), "trace": traceback.format_exc()}, 500)
+
+    # ── finance list (filterable) ─────────────────────
+
+    def _api_finance_list(self, uid, qs):
+        if not uid:
+            self._send_json({"error": "no user_id"}); return
+        ttype     = qs.get("ttype",     ["all"])[0]
+        date_from = qs.get("date_from", [""])[0].strip() or None
+        date_to   = qs.get("date_to",   [""])[0].strip() or None
+        category  = qs.get("category",  [""])[0].strip() or None
+        search    = qs.get("search",    [""])[0].strip() or None
+        limit     = int(qs.get("limit", ["500"])[0])
+        result = {}
+        if ttype in ("income", "all"):
+            rows = db_get_incomes_filtered(uid, date_from, date_to, category if ttype=="income" else None, search, limit)
+            result["income"] = [{"id":r[0],"amount":r[1],"cat":r[2],"note":r[3],"date":str(r[4])[:10]} for r in rows]
+            result["income_total"] = sum(r[1] for r in rows)
+        if ttype in ("expense", "all"):
+            rows = db_get_expenses_filtered(uid, date_from, date_to, category if ttype=="expense" else None, search, limit)
+            result["expense"] = [{"id":r[0],"amount":r[1],"cat":r[2],"note":r[3],"date":str(r[4])[:10]} for r in rows]
+            result["expense_total"] = sum(r[1] for r in rows)
+        self._send_json(result)
 
     # ── export ─────────────────────────────────────────
 
@@ -1999,8 +2239,342 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         self._send_json({"ok": True, "imported": imported, "failed": failed})
 
+    def _handle_db_download(self):
+        try:
+            with open(DB_PATH, "rb") as f:
+                data = f.read()
+            fname = os.path.basename(DB_PATH)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_db_upload(self, body):
+        import base64, shutil
+        data64 = str(body.get("data", ""))
+        try:
+            raw = base64.b64decode(data64)
+        except Exception as e:
+            self._send_json({"error": f"base64: {e}"}); return
+        if not raw.startswith(b"SQLite format 3"):
+            self._send_json({"error": "File không phải SQLite database hợp lệ"}); return
+        bak = DB_PATH + ".bak"
+        try:
+            if os.path.exists(DB_PATH):
+                shutil.copy2(DB_PATH, bak)
+            with open(DB_PATH, "wb") as f:
+                f.write(raw)
+            run_migrations()
+            self._send_json({"ok": True, "size": len(raw)})
+        except Exception as exc:
+            if os.path.exists(bak):
+                shutil.copy2(bak, DB_PATH)
+            self._send_json({"error": str(exc)}, 500)
+
 
 # ── SECTION 3: _make_html (full replacement) ───────────
+
+# ===================== AIOHTTP UNIFIED SERVER (webhook mode) =====================
+# In webhook mode a single aiohttp server handles BOTH Telegram webhook
+# updates and the HTML dashboard, so only one public port is needed.
+
+_ptb_app_ref = None  # set by run_with_webhook()
+
+def _aio_check_auth(qs) -> bool:
+    if not DASHBOARD_SECRET: return True
+    return qs.get("token", "") == DASHBOARD_SECRET
+
+def _aio_uid(qs):
+    try: return int(qs.get("user_id", ""))
+    except: return None
+
+def _dash_export_bytes(uid, scope: str, fmt: str):
+    """Return (body_bytes, content_type, filename)."""
+    if scope == "crypto":
+        rows  = db_crypto_all_trades(uid) if uid else []
+        heads = ["symbol","cg_id","side","qty","price_usd","fee_usd","note","created_at"]
+    else:
+        rows  = db_export_data(uid) if uid else []
+        heads = ["Loại","Số tiền","Ghi chú","Danh mục/Nguồn","Ngày","ID"]
+    fname = f"{scope}_export"
+    if fmt == "excel":
+        from openpyxl import Workbook
+        wb = Workbook(); ws = wb.active
+        ws.title = scope.capitalize(); ws.append(heads)
+        for r in rows: ws.append(list(r))
+        buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+        return (buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fname + ".xlsx")
+    buf = io.StringIO(); w = csv.writer(buf); w.writerow(heads)
+    for r in rows: w.writerow(list(r))
+    return (("﻿" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8-sig", fname + ".csv")
+
+def _dash_finance_list_sync(uid, qs) -> dict:
+    ttype     = qs.get("ttype",     "all")
+    date_from = (qs.get("date_from","") or "").strip() or None
+    date_to   = (qs.get("date_to",  "") or "").strip() or None
+    category  = (qs.get("category", "") or "").strip() or None
+    search    = (qs.get("search",   "") or "").strip() or None
+    limit     = int(qs.get("limit", 500) or 500)
+    result: dict = {}
+    if ttype in ("income", "all"):
+        rows = db_get_incomes_filtered(uid, date_from, date_to, category if ttype == "income" else None, search, limit)
+        result["income"] = [{"id":r[0],"amount":r[1],"cat":r[2],"note":r[3],"date":str(r[4])[:10]} for r in rows]
+        result["income_total"] = sum(r[1] for r in rows)
+    if ttype in ("expense", "all"):
+        rows = db_get_expenses_filtered(uid, date_from, date_to, category if ttype == "expense" else None, search, limit)
+        result["expense"] = [{"id":r[0],"amount":r[1],"cat":r[2],"note":r[3],"date":str(r[4])[:10]} for r in rows]
+        result["expense_total"] = sum(r[1] for r in rows)
+    return result
+
+def _dash_post_sync(uid, path: str, body: dict) -> dict:
+    """Handles all dashboard POST API calls, returns JSON-serialisable dict."""
+    import base64
+    # ── crypto ──
+    if path == "/api/crypto/add":
+        if not uid: return {"error": "no user_id"}
+        sym = str(body.get("symbol","")).strip().upper()
+        side = str(body.get("side","BUY")).strip().upper()
+        qty = float(body.get("qty",0)); price = float(body.get("price",0))
+        fee = float(body.get("fee",0) or 0); note = str(body.get("note","") or "")
+        cg = str(body.get("cg_id","") or "").strip() or None
+        ds = str(body.get("date","") or "").strip()
+        if not sym or qty <= 0 or price < 0: return {"error":"symbol/qty/price invalid"}
+        if not cg: cg = db_crypto_get_map(sym) or cg_guess_id_from_symbol(sym)
+        try: dt = datetime.datetime.fromisoformat(ds) if ds else datetime.datetime.now()
+        except: dt = datetime.datetime.now()
+        db_crypto_add_trade(uid, sym, side, qty, price, note, dt, cg, fee)
+        if cg: db_crypto_upsert_map(sym, cg)
+        return {"ok": True}
+    if path == "/api/crypto/delete":
+        tid = int(body.get("id",0))
+        if not tid: return {"error":"no id"}
+        db_crypto_delete_trade(tid); return {"ok": True}
+    if path == "/api/crypto/update":
+        tid = int(body.get("id",0))
+        if not tid: return {"error":"no id"}
+        db_crypto_update_trade(tid, float(body.get("qty",0)), float(body.get("price",0)),
+                               float(body.get("fee",0) or 0), str(body.get("note","") or ""))
+        return {"ok": True}
+    # ── finance ──
+    if path == "/api/finance/add":
+        if not uid: return {"error":"no user_id"}
+        ttype = str(body.get("ttype","expense")); amt = float(body.get("amount",0))
+        cat = str(body.get("category","") or ""); note = str(body.get("note","") or "")
+        ds = str(body.get("date","") or "").strip()
+        if amt <= 0: return {"error":"amount must be > 0"}
+        try: dt = datetime.datetime.fromisoformat(ds) if ds else datetime.datetime.now()
+        except: dt = datetime.datetime.now()
+        if ttype == "income": db_add_income(uid, amt, cat or "Khác", note, dt)
+        else: db_add_expense(uid, amt, note, cat or "Khác", dt)
+        return {"ok": True}
+    if path == "/api/finance/delete":
+        rid = int(body.get("id",0)); ttype = str(body.get("ttype","expense"))
+        if not rid: return {"error":"no id"}
+        db_delete_transaction(rid, ttype); return {"ok": True}
+    if path == "/api/finance/update":
+        rid = int(body.get("id",0)); ttype = str(body.get("ttype","expense"))
+        amt = float(body.get("amount",0)); cat = str(body.get("category","") or "")
+        note = str(body.get("note","") or ""); ds = str(body.get("date","") or "").strip()
+        if not rid: return {"error":"no id"}
+        if not ds: ds = datetime.datetime.now().isoformat()
+        if ttype == "income": db_update_income(rid, amt, cat or "Khác", note, ds)
+        else: db_update_expense(rid, amt, cat or "Khác", note, ds)
+        return {"ok": True}
+    # ── import ──
+    if path == "/api/import":
+        if not uid: return {"error":"no user_id"}
+        scope = str(body.get("scope","finance")); fmt = str(body.get("format","csv"))
+        try: raw = base64.b64decode(str(body.get("data","")))
+        except Exception as e: return {"error": f"base64: {e}"}
+        imported = failed = 0
+        try:
+            if fmt == "excel":
+                from openpyxl import load_workbook as _lw
+                wb = _lw(filename=io.BytesIO(raw), read_only=True, data_only=True); ws = wb.active
+                hdrs = [str(c.value or "").strip().lower() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+                rows_it = ({hdrs[i]:v for i,v in enumerate(row) if i<len(hdrs)} for row in ws.iter_rows(min_row=2, values_only=True))
+            else:
+                rows_it = ({k.strip().lower():v for k,v in r.items()} for r in csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
+            for row in rows_it:
+                if all((v is None or str(v).strip()=="") for v in row.values()): continue
+                try:
+                    if scope == "crypto":
+                        sym=str(row.get("symbol") or row.get("asset") or "").strip().upper()
+                        side=str(row.get("side") or "BUY").strip().upper()
+                        qty=float(row.get("qty") or row.get("quantity") or 0)
+                        price=float(row.get("price_usd") or row.get("price") or 0)
+                        fee=float(row.get("fee_usd") or row.get("fee") or 0)
+                        note=str(row.get("note") or "")
+                        cg=str(row.get("cg_id") or "").strip() or None
+                        dat=str(row.get("created_at") or row.get("date") or "").strip()
+                        if not sym or qty<=0: failed+=1; continue
+                        try: cat=datetime.datetime.fromisoformat(dat) if dat else datetime.datetime.now()
+                        except: cat=datetime.datetime.now()
+                        cg=cg or db_crypto_get_map(sym) or cg_guess_id_from_symbol(sym)
+                        db_crypto_add_trade(uid,sym,side,qty,price,note,cat,cg,fee)
+                        if cg: db_crypto_upsert_map(sym,cg)
+                    else:
+                        ttype=str(row.get("type") or row.get("ttype") or row.get("loại") or "expense").strip()
+                        amount=float(row.get("amount") or row.get("số tiền") or row.get("số_tiền") or 0)
+                        cat_=str(row.get("cat_or_source") or row.get("category") or row.get("source") or row.get("danh mục/nguồn") or row.get("danh_mục/nguồn") or "Khác")
+                        note=str(row.get("note") or row.get("ghi chú") or row.get("ghi_chú") or "")
+                        dat=str(row.get("created_at") or row.get("date") or row.get("ngày") or "").strip()
+                        if amount<=0: failed+=1; continue
+                        try: cat_dt=datetime.datetime.fromisoformat(dat) if dat else datetime.datetime.now()
+                        except: cat_dt=datetime.datetime.now()
+                        is_inc=(ttype.upper().startswith("INC") or ttype.lower() in ("income","thu nhập","thu nhap"))
+                        if is_inc: db_add_income(uid,amount,cat_,note,cat_dt)
+                        else: db_add_expense(uid,amount,note,cat_,cat_dt)
+                    imported+=1
+                except: failed+=1
+        except Exception as e: return {"error":str(e),"imported":imported,"failed":failed}
+        return {"ok":True,"imported":imported,"failed":failed}
+    if path == "/api/db/upload":
+        import base64, shutil
+        try: raw = base64.b64decode(str(body.get("data","")))
+        except Exception as e: return {"error": f"base64: {e}"}
+        if not raw.startswith(b"SQLite format 3"):
+            return {"error": "File không phải SQLite database hợp lệ"}
+        bak = DB_PATH + ".bak"
+        try:
+            if os.path.exists(DB_PATH): shutil.copy2(DB_PATH, bak)
+            with open(DB_PATH, "wb") as f: f.write(raw)
+            run_migrations()
+            return {"ok": True, "size": len(raw)}
+        except Exception as exc:
+            if os.path.exists(bak): shutil.copy2(bak, DB_PATH)
+            return {"error": str(exc)}
+    return {"error":"unknown path"}
+
+async def _aio_get(request):
+    from aiohttp import web
+    qs = request.rel_url.query
+    if not _aio_check_auth(qs):
+        return web.Response(status=403, text="403 Forbidden")
+    uid = _aio_uid(qs)
+    path = request.path
+    try:
+        if path == "/api/export":
+            scope = qs.get("scope","finance"); fmt = qs.get("format","csv")
+            data, ctype, fname = await asyncio.to_thread(_dash_export_bytes, uid, scope, fmt)
+            return web.Response(body=data, content_type=ctype.split(";")[0].strip(),
+                                headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                                         "Access-Control-Allow-Origin": "*"})
+        if path == "/api/finance/list":
+            if not uid: return web.Response(text='{"error":"no user_id"}', content_type="application/json")
+            result = await asyncio.to_thread(_dash_finance_list_sync, uid, qs)
+            return web.Response(text=json.dumps(result, ensure_ascii=False),
+                                content_type="application/json", charset="utf-8")
+        if path == "/api/finance/categories":
+            cats = await asyncio.to_thread(db_get_finance_categories, uid) if uid else {"income":[],"expense":[]}
+            return web.Response(text=json.dumps(cats, ensure_ascii=False),
+                                content_type="application/json", charset="utf-8")
+        if path == "/api/db/download":
+            try:
+                data = await asyncio.to_thread(lambda: open(DB_PATH,"rb").read())
+                fname = os.path.basename(DB_PATH)
+                return web.Response(body=data, content_type="application/octet-stream",
+                                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+            except Exception as exc:
+                return web.Response(text=json.dumps({"error":str(exc)}), content_type="application/json", status=500)
+        html = await asyncio.to_thread(_make_html, uid)
+        return web.Response(text=html, content_type="text/html", charset="utf-8")
+    except Exception as exc:
+        logger.error(f"aio_get error: {exc}")
+        return web.Response(text=json.dumps({"error": str(exc)}), content_type="application/json", status=500)
+
+async def _aio_post(request):
+    from aiohttp import web
+    qs = request.rel_url.query
+    if not _aio_check_auth(qs):
+        return web.Response(status=403, text="403 Forbidden")
+    uid = _aio_uid(qs)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        return web.Response(text=json.dumps({"error": f"JSON: {exc}"}), content_type="application/json", status=400)
+    try:
+        result = await asyncio.to_thread(_dash_post_sync, uid, request.path, body)
+    except Exception as exc:
+        result = {"error": str(exc)}
+    return web.Response(text=json.dumps(result, ensure_ascii=False),
+                        content_type="application/json", charset="utf-8",
+                        headers={"Access-Control-Allow-Origin": "*"})
+
+async def _aio_telegram(request):
+    from aiohttp import web
+    if WEBHOOK_SECRET:
+        tok = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if tok != WEBHOOK_SECRET:
+            return web.Response(status=403, text="Forbidden")
+    try:
+        data = await request.json()
+        update = Update.de_json(data, _ptb_app_ref.bot)
+        await _ptb_app_ref.update_queue.put(update)
+    except Exception as exc:
+        logger.error(f"Telegram webhook error: {exc}")
+    return web.Response(text="OK")
+
+def _setup_job_queue(ptb_app) -> None:
+    jq = ptb_app.job_queue
+    if jq is None:
+        logger.warning("JobQueue không khả dụng — pip install 'python-telegram-bot[job-queue]'")
+        return
+    try:
+        import pytz; tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    except ImportError:
+        tz = datetime.timezone(datetime.timedelta(hours=7))
+    jq.run_daily(check_recurring_job, time=datetime.time(8, 0, tzinfo=tz), name="recurring_daily")
+    jq.run_once(check_recurring_job, when=5, name="recurring_startup")
+
+async def run_with_webhook(ptb_app) -> None:
+    global _ptb_app_ref
+    _ptb_app_ref = ptb_app
+    from aiohttp import web
+    _setup_job_queue(ptb_app)
+
+    wh_path = f"/wh/{BOT_TOKEN}"
+    aio_app = web.Application()
+    aio_app.router.add_post(wh_path,                  _aio_telegram)
+    aio_app.router.add_get("/api/export",             _aio_get)
+    aio_app.router.add_get("/api/finance/list",       _aio_get)
+    aio_app.router.add_get("/api/finance/categories", _aio_get)
+    aio_app.router.add_get("/api/db/download",        _aio_get)
+    aio_app.router.add_post("/api/{tail:.*}",         _aio_post)
+    aio_app.router.add_get("/{tail:.*}",              _aio_get)
+
+    runner = web.AppRunner(aio_app, access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
+    await site.start()
+    logger.info(f"Unified server on port {WEBHOOK_PORT} (webhook + dashboard)")
+
+    async with ptb_app:
+        await ptb_app.bot.set_webhook(
+            url=f"{WEBHOOK_URL}{wh_path}",
+            secret_token=WEBHOOK_SECRET or None,
+            allowed_updates=list(Update.ALL_TYPES),
+            drop_pending_updates=False,
+        )
+        logger.info(f"Webhook OK: {WEBHOOK_URL}{wh_path}")
+        logger.info(f"Dashboard:  {WEBHOOK_URL}?user_id=YOUR_ID")
+        await ptb_app.start()
+
+        stop_event = asyncio.Event()
+        import signal as _signal
+        loop = asyncio.get_running_loop()
+        for sig in (_signal.SIGINT, _signal.SIGTERM):
+            try: loop.add_signal_handler(sig, stop_event.set)
+            except (NotImplementedError, RuntimeError): pass
+
+        await stop_event.wait()
+        await ptb_app.stop()
+
+    await runner.cleanup()
 
 def start_html_server():
     global HTML_PORT
@@ -2289,36 +2863,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     token_part = f"&token={DASHBOARD_SECRET}" if DASHBOARD_SECRET else ""
-    local_link = f"http://localhost:{HTML_PORT}?user_id={uid}{token_part}"
+    if WEBHOOK_URL:
+        link = f"{WEBHOOK_URL}?user_id={uid}{token_part}"
+        source = "☁️ Server (Railway/Cloud)"
+    else:
+        link = f"http://localhost:{HTML_PORT}?user_id={uid}{token_part}"
+        source = "🖥️ Local (máy tính)"
     secret_note = (f"\n🔑 Token: `{DASHBOARD_SECRET}`" if DASHBOARD_SECRET else
-                   "\n⚠️ Chưa đặt DASHBOARD\\_SECRET — nên thêm vào .env trước khi dùng Cloudflare")
+                   "\n⚠️ Chưa đặt DASHBOARD\\_SECRET — nên thêm vào .env")
     await update.message.reply_text(
         f"🌐 *HTML Dashboard*\n\n"
         f"🪪 Telegram ID: `{uid}`\n"
-        f"🔗 Local: `{local_link}`{secret_note}\n\n"
-        "Nếu dùng Cloudflare Tunnel, thay `localhost` bằng URL tunnel của bạn.",
+        f"📡 Chế độ: {source}\n"
+        f"🔗 Link: `{link}`{secret_note}\n\n"
+        "Tính năng:\n"
+        "• 📊 Xem portfolio crypto & thu chi\n"
+        "• 🔍 Lọc theo ngày, danh mục, từ khoá\n"
+        "• ✏️ Thêm / sửa / xóa giao dịch\n"
+        "• 📥 Import / 📤 Export CSV & Excel\n"
+        "• 💾 Backup & restore database",
         parse_mode="Markdown")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
     text = (
         "📖 *HƯỚNG DẪN NHANH*\n\n"
-        "*📈 CRYPTO* (bấm 📈 Crypto)\n"
-        "• 📊 Danh Mục → xem portfolio\n"
-        "• ➕ Mua / ➖ Bán → hướng dẫn lệnh\n"
-        "• 📈 Biểu Đồ → biểu đồ portfolio\n"
-        "• 📋 Báo Cáo → tóm tắt portfolio\n"
-        "• `mua BTC 0.01 giá 70k` → ghi ngay\n"
+        "*📈 CRYPTO*\n"
+        "• 📊 Danh Mục — portfolio + lợi nhuận\n"
+        "• ➕ Mua / ➖ Bán — nhập lệnh thủ công\n"
+        "• 📈 Biểu Đồ — giá lịch sử & cơ cấu\n"
+        "• 📋 Báo Cáo — tóm tắt theo kỳ\n"
+        "• 🔗 Map Token — gắn CoinGecko ID\n"
+        "• ⬇️ Nhập / ⬆️ Xuất — CSV & Excel\n"
+        "• Lệnh nhanh: `mua BTC 0.01 giá 70k`\n"
         "• `/cp_add SYMBOL SL GIA [note]`\n"
         "• `/cp_sell SYMBOL SL GIA [note]`\n\n"
-        "*💰 THU CHI* (bấm 💰 Thu Chi)\n"
-        "• 💵 Thêm → thêm thu/chi\n"
-        "• 🗑️ Xóa → xóa giao dịch\n"
-        "• 📋 Báo Cáo → báo cáo kỳ\n"
-        "• 📈 Biểu Đồ → biểu đồ thu chi\n"
-        "• 🎯 Ngân Sách → đặt/xem ngân sách\n"
-        "• Nhập nhanh: `20k ăn sáng` hoặc `+500k lương`\n\n"
+        "*💰 THU CHI*\n"
+        "• 💵 Thêm — thu nhập hoặc chi tiêu\n"
+        "• 🗑️ Xóa — xóa giao dịch\n"
+        "• 🎯 Ngân Sách — đặt hạn mức & cảnh báo\n"
+        "• 🔁 Định Kỳ — thu/chi tự động hàng tháng\n"
+        "• 📋 Báo Cáo / 📈 Biểu Đồ\n"
+        "• ⬇️ Nhập File / ⬆️ Xuất File\n"
+        "• Lệnh nhanh: `20k ăn sáng`, `+500k lương`\n\n"
         "*🌐 HTML Dashboard*\n"
-        f"• Truy cập: `http://IP:{HTML_PORT}?user_id=YOUR_ID`"
+        "• Lọc thu chi theo ngày, danh mục, từ khoá\n"
+        "• Thêm / sửa / xóa không cần reload\n"
+        "• Import / Export CSV & Excel\n"
+        "• 💾 Backup & restore database\n"
+        f"• Dùng /dashboard để lấy link\n\n"
+        f"🪪 ID của bạn: `{uid}`"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=_submenu_keyboard(context.user_data))
 
@@ -3592,20 +4186,20 @@ async def check_recurring_job(context: ContextTypes.DEFAULT_TYPE):
 
 # ===================== MAIN =====================
 if __name__ == "__main__":
-    start_html_server()
-    app = build_app()
-    # Schedule daily recurring check at 08:00 local time (UTC+7 Vietnam)
-    job_queue = app.job_queue
-    if job_queue is not None:
-        try:
-            import pytz
-            tz = pytz.timezone("Asia/Ho_Chi_Minh")
-        except ImportError:
-            tz = datetime.timezone(datetime.timedelta(hours=7))
-        trigger_time = datetime.time(hour=8, minute=0, tzinfo=tz)
-        job_queue.run_daily(check_recurring_job, time=trigger_time, name="recurring_daily")
-        job_queue.run_once(check_recurring_job, when=5, name="recurring_startup")
+    # Windows: aiohttp + asyncio cần SelectorEventLoop (không dùng ProactorEventLoop)
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    if WEBHOOK_URL:
+        # Webhook mode: single aiohttp server handles Telegram + dashboard
+        app = build_app()
+        logger.info(f"Webhook mode — port {WEBHOOK_PORT}")
+        asyncio.run(run_with_webhook(app))
     else:
-        logger.warning("JobQueue không khả dụng — cài lại: pip install 'python-telegram-bot[job-queue]'")
-    logger.info(f"Bot đang chạy... HTML dashboard port {HTML_PORT}")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Polling mode: separate thread for dashboard, PTB polls Telegram
+        start_html_server()
+        app = build_app()
+        _setup_job_queue(app)
+        logger.info(f"Polling mode — dashboard port {HTML_PORT}")
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
