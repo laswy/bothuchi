@@ -252,10 +252,30 @@ def t(key: str, uid: int) -> str:
     lang = db_get_lang(uid)
     return STRINGS.get(lang, STRINGS['en']).get(key, STRINGS['en'].get(key, key))
 
+# Finance amounts are stored in VND. When displayed in EN mode they are
+# converted to USD using a live exchange rate (cached 1 hour).
+import time as _time
+_forex_cache: dict = {'rate': 25000.0, 'ts': 0.0}
+_FOREX_TTL = 3600  # seconds
+
+def _get_vnd_per_usd() -> float:
+    now = _time.time()
+    if now - _forex_cache['ts'] < _FOREX_TTL:
+        return _forex_cache['rate']
+    try:
+        resp = requests.get('https://open.er-api.com/v6/latest/USD', timeout=5)
+        rate = float(resp.json()['rates']['VND'])
+        _forex_cache.update({'rate': rate, 'ts': now})
+        return rate
+    except Exception:
+        return _forex_cache['rate']  # use cached/default
+
 def fmt_amount(amount: float, uid: int) -> str:
-    c = CURRENCY[db_get_lang(uid)]
-    n = f"{amount:,.{c['decimals']}f}"
-    return f"{c['symbol']}{n}" if c['position'] == 'prefix' else f"{n} {c['symbol']}"
+    lang = db_get_lang(uid)
+    if lang == 'en':
+        usd = amount / _get_vnd_per_usd()
+        return f"${usd:,.2f}"
+    return f"{amount:,.0f} đ"
 
 def db_crypto_upsert_map(symbol: str, cg_id: str, name: Optional[str] = None):
     conn = db_conn(); cur = conn.cursor()
