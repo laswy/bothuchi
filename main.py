@@ -62,6 +62,8 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 _default_html = 8080 if WEBHOOK_PORT != 8080 else 8081
 HTML_PORT = int(os.environ.get("HTML_PORT", str(_default_html)))
 
+COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+
 OWNER_USER_ID   = 679130099
 CHANNEL_CHAT_ID    = int(os.environ.get("CHANNEL_CHAT_ID",    "-1001974996093"))
 FINANCE_CHANNEL_ID = os.environ.get("FINANCE_CHANNEL_ID") or CHANNEL_CHAT_ID
