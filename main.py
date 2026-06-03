@@ -51,13 +51,16 @@ logger = logging.getLogger(__name__)
 # ===================== CONFIG =====================
 BOT_TOKEN        = os.environ["TELEGRAM_BOT_TOKEN"]
 DB_PATH          = os.environ.get("UNIVER_DB_PATH", "univer_all_in_one.db")
-HTML_PORT        = int(os.environ.get("HTML_PORT", "8080"))
 DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET", "")
 
 # Webhook config (để trống = dùng polling)
 WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "").rstrip("/")   # vd: https://mybot.up.railway.app
 WEBHOOK_PORT   = int(os.environ.get("WEBHOOK_PORT") or os.environ.get("PORT") or "8443")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+
+# Dashboard port — tránh trùng với webhook port
+_default_html = 8080 if WEBHOOK_PORT != 8080 else 8081
+HTML_PORT = int(os.environ.get("HTML_PORT", str(_default_html)))
 
 OWNER_USER_ID   = 679130099
 CHANNEL_CHAT_ID    = int(os.environ.get("CHANNEL_CHAT_ID",    "-1001974996093"))
