@@ -173,6 +173,8 @@ def run_migrations():
     cols = {row[1] for row in cur.fetchall()}
     if 'lang' not in cols:
         cur.execute("ALTER TABLE user_settings ADD COLUMN lang TEXT DEFAULT 'en'")
+    if 'currency' not in cols:
+        cur.execute("ALTER TABLE user_settings ADD COLUMN currency TEXT DEFAULT 'VND'")
     # Finance tables
     cur.execute("""CREATE TABLE IF NOT EXISTS expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -248,6 +250,27 @@ def db_set_lang(user_id: int, lang: str):
         ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang""", (user_id, lang))
     conn.commit(); conn.close()
 
+SUPPORTED_CURRENCIES = ('VND', 'USD')
+_user_currencies: dict[int, str] = {}
+
+def db_get_currency(user_id: int) -> str:
+    if user_id in _user_currencies:
+        return _user_currencies[user_id]
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("SELECT currency FROM user_settings WHERE user_id=?", (user_id,))
+    row = cur.fetchone(); conn.close()
+    cur_code = row[0] if row and row[0] in SUPPORTED_CURRENCIES else 'VND'
+    _user_currencies[user_id] = cur_code
+    return cur_code
+
+def db_set_currency(user_id: int, currency: str):
+    if currency not in SUPPORTED_CURRENCIES: currency = 'VND'
+    _user_currencies[user_id] = currency
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("""INSERT INTO user_settings(user_id, currency) VALUES(?,?)
+        ON CONFLICT(user_id) DO UPDATE SET currency=excluded.currency""", (user_id, currency))
+    conn.commit(); conn.close()
+
 def t(key: str, uid: int) -> str:
     lang = db_get_lang(uid)
     return STRINGS.get(lang, STRINGS['en']).get(key, STRINGS['en'].get(key, key))
@@ -270,12 +293,20 @@ def _get_vnd_per_usd() -> float:
     except Exception:
         return _forex_cache['rate']  # use cached/default
 
-def fmt_amount(amount: float, uid: int) -> str:
-    lang = db_get_lang(uid)
-    if lang == 'en':
-        usd = amount / _get_vnd_per_usd()
-        return f"${usd:,.2f}"
-    return f"{amount:,.0f} đ"
+def fmt_amount(amount_vnd: float, uid: int) -> str:
+    """Format a VND amount for display. Converts to USD if user's currency is USD."""
+    if db_get_currency(uid) == 'USD':
+        return f"${amount_vnd / _get_vnd_per_usd():,.2f}"
+    return f"{amount_vnd:,.0f} đ"
+
+def parse_finance_amount(text: str, uid: int) -> float:
+    """Parse a finance amount from user input. Returns the value in VND.
+    If the user's currency is USD, the parsed number is multiplied by the
+    current VND/USD rate before being stored."""
+    raw = parse_amount(text)
+    if db_get_currency(uid) == 'USD':
+        return raw * _get_vnd_per_usd()
+    return raw
 
 def db_crypto_upsert_map(symbol: str, cg_id: str, name: Optional[str] = None):
     conn = db_conn(); cur = conn.cursor()
@@ -2930,7 +2961,7 @@ def _expense_cat_kb():
 
 async def get_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        amount=parse_amount(update.message.text)
+        amount=parse_finance_amount(update.message.text, update.effective_user.id)
         if amount<=0: await update.message.reply_text("Số tiền phải > 0:"); return CHOOSING_INCOME_AMOUNT
         if amount>LARGE_AMOUNT_THRESHOLD:
             context.user_data['amount_to_confirm']=amount
@@ -2993,7 +3024,7 @@ async def get_income_source(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def get_expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        amount=parse_amount(update.message.text)
+        amount=parse_finance_amount(update.message.text, update.effective_user.id)
         if amount<=0: await update.message.reply_text("Số tiền phải > 0:"); return CHOOSING_EXPENSE_AMOUNT
         if amount>LARGE_AMOUNT_THRESHOLD:
             context.user_data['amount_to_confirm']=amount
@@ -3423,7 +3454,7 @@ async def budget_set_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t('budget_usage', uid)); return
     category=" ".join(tokens[1:-1]).strip()
     try:
-        amount=parse_amount(tokens[-1])
+        amount=parse_finance_amount(tokens[-1], uid)
         if amount<=0: raise ValueError
         db_set_budget(uid,category,amount)
         await update.message.reply_text(t('budget_saved', uid).format(cat=category, amount=fmt_amount(amount,uid)),parse_mode='Markdown')
@@ -3510,6 +3541,22 @@ async def set_lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['lang'] = lang
     msg = t('lang_set_en', uid) if lang == 'en' else t('lang_set_vi', uid)
     await q.edit_message_text(msg, reply_markup=main_menu_keyboard(lang))
+
+async def currency_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🇻🇳 VND (đ)", callback_data="set_currency:VND"),
+        InlineKeyboardButton("🇺🇸 USD ($)", callback_data="set_currency:USD"),
+    ]])
+    await update.message.reply_text(t('currency_choose', uid), reply_markup=kb)
+
+async def set_currency_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    currency = q.data.split(":")[1]
+    db_set_currency(uid, currency)
+    msg = t('currency_set_vnd', uid) if currency == 'VND' else t('currency_set_usd', uid)
+    await q.edit_message_text(msg)
 
 # ===================== BUILD APP =====================
 def build_app() -> "Application":
@@ -3655,6 +3702,8 @@ def build_app() -> "Application":
     # Language command and callback
     app.add_handler(CommandHandler("language", language_cmd))
     app.add_handler(CallbackQueryHandler(set_lang_callback, pattern="^set_lang:"))
+    app.add_handler(CommandHandler("currency", currency_cmd))
+    app.add_handler(CallbackQueryHandler(set_currency_callback, pattern="^set_currency:"))
 
     # Unified catch-all (natural trade + finance NLP)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unified_text_handler))
@@ -3757,7 +3806,8 @@ async def recurring_pick_type(update: Update, context: ContextTypes.DEFAULT_TYPE
     return RECURRING_ADD_AMOUNT
 
 async def recurring_get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    amount = parse_amount_loose(update.message.text)
+    uid = update.effective_user.id
+    amount = parse_finance_amount(update.message.text, uid)
     if not amount or amount <= 0:
         await update.message.reply_text("⚠️ Số tiền không hợp lệ. Nhập lại (VD: 250k):"); return RECURRING_ADD_AMOUNT
     context.user_data['recur_amount'] = amount
@@ -3906,7 +3956,7 @@ async def recurring_edit_value(update: Update, context: ContextTypes.DEFAULT_TYP
     # Text input
     text = update.message.text.strip()
     if field == 'amount':
-        new_amount = parse_amount_loose(text)
+        new_amount = parse_finance_amount(text, uid)
         if not new_amount or new_amount <= 0:
             await update.message.reply_text("⚠️ Số tiền không hợp lệ. Nhập lại:"); return RECURRING_EDIT_VALUE
         db_recurring_update(rec_id, new_amount, category, note, day, month)

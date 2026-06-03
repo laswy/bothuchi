@@ -93,6 +93,10 @@ STRINGS: dict[str, dict[str, str]] = {
         'lang_choose':      '🌐 Choose language / Chọn ngôn ngữ:',
         'lang_set_en':      '✅ Language set to English.',
         'lang_set_vi':      '✅ Đã chuyển sang Tiếng Việt.',
+        # ── Currency ──────────────────────────────────────────────
+        'currency_choose':  '💱 Choose your preferred currency:',
+        'currency_set_vnd': '✅ Currency set to VND (đ).',
+        'currency_set_usd': '✅ Currency set to USD ($).',
         # ── Rate limit ────────────────────────────────────────────
         'rate_limit':       '⏳ Too many requests. Wait {sec}s and try again.',
         # ── Crypto messages ───────────────────────────────────────
@@ -254,6 +258,10 @@ STRINGS: dict[str, dict[str, str]] = {
         'lang_choose':      '🌐 Choose language / Chọn ngôn ngữ:',
         'lang_set_en':      '✅ Language set to English.',
         'lang_set_vi':      '✅ Đã chuyển sang Tiếng Việt.',
+        # ── Currency ──────────────────────────────────────────────
+        'currency_choose':  '💱 Chọn đơn vị tiền tệ bạn muốn:',
+        'currency_set_vnd': '✅ Đã chuyển sang VND (đ).',
+        'currency_set_usd': '✅ Đã chuyển sang USD ($).',
         # ── Rate limit ────────────────────────────────────────────
         'rate_limit':       '⏳ Gửi lệnh quá nhanh. Chờ {sec}s rồi thử lại.',
         # ── Crypto messages ───────────────────────────────────────
