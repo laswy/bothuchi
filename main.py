@@ -3582,7 +3582,8 @@ async def set_lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_set_lang(uid, lang)
     context.user_data['lang'] = lang
     msg = t('lang_set_en', uid) if lang == 'en' else t('lang_set_vi', uid)
-    await q.edit_message_text(msg, reply_markup=main_menu_keyboard(lang))
+    await q.edit_message_text(msg)
+    await q.message.reply_text(t('menu_home', uid), reply_markup=main_menu_keyboard(lang))
 
 async def currency_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
