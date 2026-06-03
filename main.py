@@ -3581,8 +3581,12 @@ async def set_lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = q.data.split(":")[1]
     db_set_lang(uid, lang)
     context.user_data['lang'] = lang
+    # Auto-set default currency to match language (user can override with /currency)
+    default_currency = 'USD' if lang == 'en' else 'VND'
+    db_set_currency(uid, default_currency)
     msg = t('lang_set_en', uid) if lang == 'en' else t('lang_set_vi', uid)
-    await q.edit_message_text(msg)
+    cur_note = ' | 💱 USD' if lang == 'en' else ' | 💱 VND'
+    await q.edit_message_text(msg + cur_note)
     await q.message.reply_text(t('menu_home', uid), reply_markup=main_menu_keyboard(lang))
 
 async def currency_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
