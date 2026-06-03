@@ -33,6 +33,12 @@ STRINGS: dict[str, dict[str, str]] = {
         'btn_fexport':      '⬆️ Export File',
         'btn_chart':        '📈 Chart',
         'btn_report':       '📋 Report',
+        'btn_settings':     '⚙️ Settings',
+        # ── Settings ──────────────────────────────────────────────
+        'settings_title':       '⚙️ *Settings*',
+        'settings_btn_lang':    '🌐 Language',
+        'settings_btn_currency':'💱 Currency',
+        'settings_btn_dashboard':'🌐 Dashboard',
         # ── Menus ─────────────────────────────────────────────────
         'menu_crypto':      '📈 *Crypto*:',
         'menu_finance':     '💰 *Finance*:',
@@ -302,6 +308,12 @@ STRINGS: dict[str, dict[str, str]] = {
         'btn_fexport':      '⬆️ Xuất File',
         'btn_chart':        '📈 Biểu Đồ',
         'btn_report':       '📋 Báo Cáo',
+        'btn_settings':     '⚙️ Cài Đặt',
+        # ── Settings ──────────────────────────────────────────────
+        'settings_title':       '⚙️ *Cài Đặt*',
+        'settings_btn_lang':    '🌐 Ngôn Ngữ',
+        'settings_btn_currency':'💱 Tiền Tệ',
+        'settings_btn_dashboard':'🌐 Dashboard',
         # ── Menus ─────────────────────────────────────────────────
         'menu_crypto':      '📈 *Crypto*:',
         'menu_finance':     '💰 *Thu Chi*:',

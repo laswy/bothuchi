@@ -1281,10 +1281,163 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
     return charts
 
 # ===================== HTML DASHBOARD =====================
-def _make_html(user_id=None) -> str:  # noqa: C901
+def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
     now = datetime.datetime.now()
     ts  = now.strftime("%d/%m/%Y %H:%M:%S")
-    uid_note = f"User ID: {user_id}" if user_id else "Thêm ?user_id=ID vào URL để xem dữ liệu"
+
+    _L: dict[str, dict] = {
+        'vi': {
+            'uid_hint': 'Thêm ?user_id=ID vào URL để xem dữ liệu',
+            'updated': 'Cập nhật',
+            'dl_db': '💾 Tải xuống DB',
+            'ul_db': '⬆️ Upload DB (ghi đè)',
+            'err': 'Lỗi',
+            # crypto
+            'crypto_portfolio': '🪙 Danh Mục Crypto',
+            'crypto_col_qty': 'SL',
+            'crypto_col_price': 'Giá',
+            'crypto_col_value': 'Giá trị',
+            'crypto_col_cost': 'Vốn',
+            'crypto_col_pnl': 'Lãi/Lỗ',
+            'crypto_no_data': 'Chưa có dữ liệu',
+            'crypto_total': 'Tổng portfolio',
+            'crypto_trades': '📋 Lịch Sử Giao Dịch Crypto',
+            'btn_add': '➕ Thêm',
+            'btn_import': '⬆️ Nhập file',
+            'col_date': 'Ngày',
+            'col_type': 'Loại',
+            'col_qty': 'SL',
+            'col_price': 'Giá',
+            'col_fee': 'Phí',
+            'col_note': 'Ghi chú',
+            'col_action': 'Thao tác',
+            'no_trades': 'Chưa có giao dịch',
+            # finance overview
+            'fin_overview': '💵 Tổng Quan Tài Chính',
+            'this_month': 'Tháng',
+            'last_month': 'Tháng',
+            'this_year': 'Năm',
+            'all_time': 'Tất cả',
+            'income_lbl': 'Thu',
+            'expense_lbl': 'Chi',
+            'balance_lbl': 'Dư',
+            'budget_title': '🎯 Ngân Sách Tháng',
+            'no_income': 'Chưa có thu nhập',
+            'no_expense': 'Chưa có chi tiêu',
+            'inc_by_src': '💵 Thu nhập theo nguồn',
+            'exp_by_cat': '💸 Chi tiêu theo danh mục',
+            'col_source': 'Nguồn',
+            'col_cat': 'Danh mục',
+            'col_amount': 'Số tiền',
+            'col_pct': '%',
+            'last_mo_exp': 'Chi Tiêu Theo Danh Mục',
+            'trend_title': '📈 Xu Hướng Thu Chi — 13 Tháng Gần Nhất',
+            # filter section
+            'filter_title': '📊 Lọc Thu Chi',
+            'btn_income': '➕ Thu nhập',
+            'btn_expense': '➕ Chi tiêu',
+            'qb_thismonth': 'Tháng này',
+            'qb_lastmonth': 'Tháng trước',
+            'qb_thisquarter': 'Quý này',
+            'qb_thisyear': 'Năm nay',
+            'qb_lastyear': 'Năm ngoái',
+            'qb_all': 'Tất cả',
+            'lbl_from': 'Từ ngày',
+            'lbl_to': 'Đến ngày',
+            'lbl_inc_src': 'Nguồn thu nhập',
+            'lbl_exp_cat': 'Danh mục chi tiêu',
+            'lbl_search': 'Tìm kiếm',
+            'ph_search': 'Ghi chú, nguồn...',
+            'opt_all': '-- Tất cả --',
+            'btn_filter': '🔍 Lọc',
+            'tbl_income': '💰 Thu Nhập',
+            'col_src': 'Nguồn',
+            'tbl_expense': '💸 Chi Tiêu',
+            'loading': '⚡ Đang tải...',
+            'items': 'khoản',
+            'net_lbl': 'Cân đối',
+            'btn_cancel': 'Hủy',
+            'btn_save': 'Lưu',
+        },
+        'en': {
+            'uid_hint': 'Add ?user_id=ID to URL to view data',
+            'updated': 'Updated',
+            'dl_db': '💾 Download DB',
+            'ul_db': '⬆️ Upload DB (overwrite)',
+            'err': 'Error',
+            # crypto
+            'crypto_portfolio': '🪙 Crypto Portfolio',
+            'crypto_col_qty': 'Qty',
+            'crypto_col_price': 'Price',
+            'crypto_col_value': 'Value',
+            'crypto_col_cost': 'Cost',
+            'crypto_col_pnl': 'P&L',
+            'crypto_no_data': 'No data yet',
+            'crypto_total': 'Portfolio total',
+            'crypto_trades': '📋 Crypto Trade History',
+            'btn_add': '➕ Add',
+            'btn_import': '⬆️ Import file',
+            'col_date': 'Date',
+            'col_type': 'Type',
+            'col_qty': 'Qty',
+            'col_price': 'Price',
+            'col_fee': 'Fee',
+            'col_note': 'Note',
+            'col_action': 'Actions',
+            'no_trades': 'No trades yet',
+            # finance overview
+            'fin_overview': '💵 Finance Overview',
+            'this_month': 'Month',
+            'last_month': 'Month',
+            'this_year': 'Year',
+            'all_time': 'All time',
+            'income_lbl': 'In',
+            'expense_lbl': 'Out',
+            'balance_lbl': 'Net',
+            'budget_title': '🎯 Monthly Budget',
+            'no_income': 'No income yet',
+            'no_expense': 'No expenses yet',
+            'inc_by_src': '💵 Income by source',
+            'exp_by_cat': '💸 Expenses by category',
+            'col_source': 'Source',
+            'col_cat': 'Category',
+            'col_amount': 'Amount',
+            'col_pct': '%',
+            'last_mo_exp': 'Expenses by Category',
+            'trend_title': '📈 Income & Expense Trend — Last 13 Months',
+            # filter section
+            'filter_title': '📊 Filter Transactions',
+            'btn_income': '➕ Income',
+            'btn_expense': '➕ Expense',
+            'qb_thismonth': 'This month',
+            'qb_lastmonth': 'Last month',
+            'qb_thisquarter': 'This quarter',
+            'qb_thisyear': 'This year',
+            'qb_lastyear': 'Last year',
+            'qb_all': 'All',
+            'lbl_from': 'From date',
+            'lbl_to': 'To date',
+            'lbl_inc_src': 'Income source',
+            'lbl_exp_cat': 'Expense category',
+            'lbl_search': 'Search',
+            'ph_search': 'Note, source...',
+            'opt_all': '-- All --',
+            'btn_filter': '🔍 Filter',
+            'tbl_income': '💰 Income',
+            'col_src': 'Source',
+            'tbl_expense': '💸 Expenses',
+            'loading': '⚡ Loading...',
+            'items': 'items',
+            'net_lbl': 'Net balance',
+            'btn_cancel': 'Cancel',
+            'btn_save': 'Save',
+        },
+    }
+    if lang not in _L:
+        lang = 'vi'
+    L = _L[lang]
+
+    uid_note = f"User ID: {user_id}" if user_id else L['uid_hint']
 
     def _month_range(y, m):
         s = datetime.datetime(y, m, 1)
@@ -1323,16 +1476,17 @@ def _make_html(user_id=None) -> str:  # noqa: C901
                          f"<td>${val:,.2f}</td><td>${inv:,.2f}</td>"
                          f"<td style='color:{c}'>${pnl:+,.2f} ({pct:+.1f}%)</td></tr>")
         except Exception as ex:
-            crow = f"<tr><td colspan='6' class='empty'>Lỗi: {ex}</td></tr>"; crypto_total = 0
+            crow = f"<tr><td colspan='6' class='empty'>{L['err']}: {ex}</td></tr>"; crypto_total = 0
 
+        _no_data = f'<tr><td colspan="6" class="empty">{L["crypto_no_data"]}</td></tr>'
         crypto_summary_html = f"""
         <div class="card">
           <div class="card-hdr">
-            <h2>&#x1FA99; Danh M&#x1EE5;c Crypto</h2>
+            <h2>{L['crypto_portfolio']}</h2>
           </div>
-          <table><thead><tr><th>Token</th><th>SL</th><th>Gi&#xE1;</th><th>Gi&#xE1; tr&#x1ECB;</th><th>V&#x1ED1;n</th><th>L&#xE3;i/L&#x1ED7;</th></tr></thead>
-          <tbody>{crow or '<tr><td colspan="6" class="empty">Ch&#432;a c&#243; d&#7919;u li&#7879;u</td></tr>'}</tbody></table>
-          <p class="total">T&#x1ED5;ng portfolio: <b>${crypto_total:,.2f} USD</b></p>
+          <table><thead><tr><th>Token</th><th>{L['crypto_col_qty']}</th><th>{L['crypto_col_price']}</th><th>{L['crypto_col_value']}</th><th>{L['crypto_col_cost']}</th><th>{L['crypto_col_pnl']}</th></tr></thead>
+          <tbody>{crow or _no_data}</tbody></table>
+          <p class="total">{L['crypto_total']}: <b>${crypto_total:,.2f} USD</b></p>
         </div>"""
 
         # ── Crypto trades list ───────────────────────
@@ -1359,24 +1513,25 @@ def _make_html(user_id=None) -> str:  # noqa: C901
                     f"</td></tr>"
                 )
         except Exception as ex:
-            ct_rows = f"<tr><td colspan='8' class='empty'>L&#x1ED7;i: {ex}</td></tr>"
+            ct_rows = f"<tr><td colspan='8' class='empty'>{L['err']}: {ex}</td></tr>"
 
+        _no_trades = f'<tr><td colspan="8" class="empty">{L["no_trades"]}</td></tr>'
         crypto_trades_html = f"""
         <div class="card">
           <div class="card-hdr">
-            <h2>&#x1F4CB; L&#x1ECB;ch S&#x1EED; Giao D&#x1ECB;ch Crypto</h2>
+            <h2>{L['crypto_trades']}</h2>
             <div class="btns">
-              <button class="btn-pri" onclick="openAddCrypto()">&#x2795; Th&#xEA;m</button>
+              <button class="btn-pri" onclick="openAddCrypto()">{L['btn_add']}</button>
               <button class="btn-sec" onclick="exportData('crypto','csv')">&#x2B07;&#xFE0F; CSV</button>
               <button class="btn-sec" onclick="exportData('crypto','excel')">&#x2B07;&#xFE0F; Excel</button>
-              <label class="btn-sec" style="cursor:pointer">&#x2B06;&#xFE0F; Nh&#x1EAD;p file
+              <label class="btn-sec" style="cursor:pointer">{L['btn_import']}
                 <input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('crypto',this)">
               </label>
             </div>
           </div>
           <div style="overflow-x:auto">
-          <table><thead><tr><th>Ng&#xE0;y</th><th>Symbol</th><th>Lo&#x1EA1;i</th><th>SL</th><th>Gi&#xE1;</th><th>Ph&#xED;</th><th>Ghi ch&#xFA;</th><th>Thao t&#xE1;c</th></tr></thead>
-          <tbody>{ct_rows or '<tr><td colspan="8" class="empty">Ch&#432;a c&#243; giao d&#x1ECB;ch</td></tr>'}</tbody></table>
+          <table><thead><tr><th>{L['col_date']}</th><th>Symbol</th><th>{L['col_type']}</th><th>{L['col_qty']}</th><th>{L['col_price']}</th><th>{L['col_fee']}</th><th>{L['col_note']}</th><th>{L['col_action']}</th></tr></thead>
+          <tbody>{ct_rows or _no_trades}</tbody></table>
           </div>
         </div>"""
 
@@ -1408,7 +1563,7 @@ def _make_html(user_id=None) -> str:  # noqa: C901
             })
 
             if budgets:
-                bhtml = f"<div class='card'><h2>&#x1F3AF; Ng&#xE2;n S&#xE1;ch Th&#xE1;ng {cur_m:02d}/{cur_y}</h2>"
+                bhtml = f"<div class='card'><h2>{L['budget_title']} {cur_m:02d}/{cur_y}</h2>"
                 for cat, lim in budgets.items():
                     spent = next((r[1] for r in tm_eg if r[0] == cat), 0)
                     pct2  = min(spent / lim * 100, 100) if lim > 0 else 0
@@ -1424,41 +1579,41 @@ def _make_html(user_id=None) -> str:  # noqa: C901
 
             def _pct(v, total): return f"{v/total*100:.1f}%" if total > 0 else "–"
             def _inc_rows(groups, total):
-                if not groups: return "<tr><td colspan='3' class='empty'>Ch&#432;a c&#243; thu nh&#x1EAD;p</td></tr>"
+                if not groups: return f"<tr><td colspan='3' class='empty'>{L['no_income']}</td></tr>"
                 return "".join(f"<tr><td>{r[0]}</td><td class='amount green'>{r[1]:,.0f} &#x111;</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
             def _exp_rows(groups, total):
-                if not groups: return "<tr><td colspan='3' class='empty'>Ch&#432;a c&#243; chi ti&#xEA;u</td></tr>"
+                if not groups: return f"<tr><td colspan='3' class='empty'>{L['no_expense']}</td></tr>"
                 return "".join(f"<tr><td>{r[0]}</td><td class='amount red'>{r[1]:,.0f} &#x111;</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
 
             def _bc(v): return "#00ff88" if v >= 0 else "#ff4757"
 
             finance_html = f"""
             <div class="card">
-              <h2>&#x1F4B5; T&#x1ED5;ng Quan T&#xE0;i Ch&#xED;nh</h2>
+              <h2>{L['fin_overview']}</h2>
               <div class="period-tabs">
                 <div class="period-card">
-                  <div class="period-label">&#x1F4C5; Th&#xE1;ng {cur_m:02d}/{cur_y}</div>
-                  <div class="prow green">Thu: {tm_i:,.0f} &#x111;</div>
-                  <div class="prow red">Chi: {tm_e_:,.0f} &#x111;</div>
-                  <div class="prow" style="color:{_bc(tm_b)}"><b>D&#432;: {tm_b:,.0f} &#x111;</b></div>
+                  <div class="period-label">&#x1F4C5; {L['this_month']} {cur_m:02d}/{cur_y}</div>
+                  <div class="prow green">{L['income_lbl']}: {tm_i:,.0f} &#x111;</div>
+                  <div class="prow red">{L['expense_lbl']}: {tm_e_:,.0f} &#x111;</div>
+                  <div class="prow" style="color:{_bc(tm_b)}"><b>{L['balance_lbl']}: {tm_b:,.0f} &#x111;</b></div>
                 </div>
                 <div class="period-card">
-                  <div class="period-label">&#x2B05;&#xFE0F; Th&#xE1;ng {lm_m:02d}/{lm_y}</div>
-                  <div class="prow green">Thu: {lm_i:,.0f} &#x111;</div>
-                  <div class="prow red">Chi: {lm_e_:,.0f} &#x111;</div>
-                  <div class="prow" style="color:{_bc(lm_b)}"><b>D&#432;: {lm_b:,.0f} &#x111;</b></div>
+                  <div class="period-label">&#x2B05;&#xFE0F; {L['last_month']} {lm_m:02d}/{lm_y}</div>
+                  <div class="prow green">{L['income_lbl']}: {lm_i:,.0f} &#x111;</div>
+                  <div class="prow red">{L['expense_lbl']}: {lm_e_:,.0f} &#x111;</div>
+                  <div class="prow" style="color:{_bc(lm_b)}"><b>{L['balance_lbl']}: {lm_b:,.0f} &#x111;</b></div>
                 </div>
                 <div class="period-card">
-                  <div class="period-label">&#x1F5D3;&#xFE0F; N&#x103;m {cur_y}</div>
-                  <div class="prow green">Thu: {ty_i:,.0f} &#x111;</div>
-                  <div class="prow red">Chi: {ty_e_:,.0f} &#x111;</div>
-                  <div class="prow" style="color:{_bc(ty_b)}"><b>D&#432;: {ty_b:,.0f} &#x111;</b></div>
+                  <div class="period-label">&#x1F5D3;&#xFE0F; {L['this_year']} {cur_y}</div>
+                  <div class="prow green">{L['income_lbl']}: {ty_i:,.0f} &#x111;</div>
+                  <div class="prow red">{L['expense_lbl']}: {ty_e_:,.0f} &#x111;</div>
+                  <div class="prow" style="color:{_bc(ty_b)}"><b>{L['balance_lbl']}: {ty_b:,.0f} &#x111;</b></div>
                 </div>
                 <div class="period-card">
-                  <div class="period-label">&#x23F0; T&#x1EA5;t c&#x1EA3;</div>
-                  <div class="prow green">Thu: {all_i:,.0f} &#x111;</div>
-                  <div class="prow red">Chi: {all_e:,.0f} &#x111;</div>
-                  <div class="prow" style="color:{_bc(all_b)}"><b>D&#432;: {all_b:,.0f} &#x111;</b></div>
+                  <div class="period-label">&#x23F0; {L['all_time']}</div>
+                  <div class="prow green">{L['income_lbl']}: {all_i:,.0f} &#x111;</div>
+                  <div class="prow red">{L['expense_lbl']}: {all_e:,.0f} &#x111;</div>
+                  <div class="prow" style="color:{_bc(all_b)}"><b>{L['balance_lbl']}: {all_b:,.0f} &#x111;</b></div>
                 </div>
               </div>
             </div>
@@ -1466,16 +1621,16 @@ def _make_html(user_id=None) -> str:  # noqa: C901
             {bhtml}
 
             <div class="card">
-              <h2>&#x1F4C5; Th&#xE1;ng {cur_m:02d}/{cur_y} &#x2014; Thu Chi Theo Danh M&#x1EE5;c</h2>
+              <h2>&#x1F4C5; {L['this_month']} {cur_m:02d}/{cur_y}</h2>
               <div class="two-col">
                 <div>
-                  <h3 class="sub-h">&#x1F4B5; Thu nh&#x1EAD;p theo ngu&#x1ED3;n</h3>
-                  <table><thead><tr><th>Ngu&#x1ED3;n</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>%</th></tr></thead>
+                  <h3 class="sub-h">{L['inc_by_src']}</h3>
+                  <table><thead><tr><th>{L['col_source']}</th><th>{L['col_amount']}</th><th>{L['col_pct']}</th></tr></thead>
                   <tbody>{_inc_rows(tm_ig, tm_i)}</tbody></table>
                 </div>
                 <div>
-                  <h3 class="sub-h">&#x1F4B8; Chi ti&#xEA;u theo danh m&#x1EE5;c</h3>
-                  <table><thead><tr><th>Danh m&#x1EE5;c</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>%</th></tr></thead>
+                  <h3 class="sub-h">{L['exp_by_cat']}</h3>
+                  <table><thead><tr><th>{L['col_cat']}</th><th>{L['col_amount']}</th><th>{L['col_pct']}</th></tr></thead>
                   <tbody>{_exp_rows(tm_eg, tm_e_)}</tbody></table>
                 </div>
               </div>
@@ -1486,25 +1641,67 @@ def _make_html(user_id=None) -> str:  # noqa: C901
             </div>
 
             <div class="card">
-              <h2>&#x2B05;&#xFE0F; Th&#xE1;ng {lm_m:02d}/{lm_y} &#x2014; Chi Ti&#xEA;u Theo Danh M&#x1EE5;c</h2>
-              <table><thead><tr><th>Danh m&#x1EE5;c</th><th>S&#x1ED1; ti&#x1EC1;n</th><th>%</th></tr></thead>
+              <h2>&#x2B05;&#xFE0F; {L['last_month']} {lm_m:02d}/{lm_y} &#x2014; {L['last_mo_exp']}</h2>
+              <table><thead><tr><th>{L['col_cat']}</th><th>{L['col_amount']}</th><th>{L['col_pct']}</th></tr></thead>
               <tbody>{_exp_rows(lm_eg, lm_e_)}</tbody></table>
             </div>
 
             <div class="card">
-              <h2>&#x1F4C8; Xu H&#432;&#x1EDB;ng Thu Chi &#x2014; 13 Th&#xE1;ng G&#x1EA7;n Nh&#x1EA5;t</h2>
+              <h2>{L['trend_title']}</h2>
               <div class="chart-full"><canvas id="trendChart"></canvas></div>
             </div>"""
 
         except Exception as ex:
-            finance_html = f"<div class='card'><p style='color:#ff4757'>L&#x1ED7;i: {ex}</p></div>"
+            finance_html = f"<div class='card'><p style='color:#ff4757'>{L['err']}: {ex}</p></div>"
 
         income_list_html = ""
         expense_list_html = ""
 
     # ── Assemble HTML ────────────────────────────────
+    _js_strings: dict[str, dict] = {
+        'vi': {
+            'income': 'Thu nhập', 'expense': 'Chi tiêu',
+            'inc_donut': 'Thu nhập theo nguồn', 'exp_donut': 'Chi tiêu theo danh mục',
+            'import_done': 'Nhập xong: $0 thành công, $1 lỗi',
+            'err': 'Lỗi', 'confirm_del': 'Xóa giao dịch này?',
+            'add_crypto': '➕ Thêm Giao Dịch Crypto',
+            'edit_crypto': '✏️ Sửa Giao Dịch Crypto',
+            'edit_income': '✏️ Sửa Thu Nhập',
+            'edit_expense': '✏️ Sửa Chi Tiêu',
+            'type': 'Loại', 'buy': 'Mua', 'sell': 'Bán',
+            'qty': 'Số lượng', 'price_usd': 'Giá (USD)', 'fee_usd': 'Phí (USD)',
+            'cg_id': 'CoinGecko ID (tùy chọn)', 'note': 'Ghi chú', 'date': 'Ngày',
+            'amount': 'Số tiền', 'amount_vnd': 'Số tiền (VND)',
+            'source': 'Nguồn', 'category': 'Danh mục',
+            'loading': '⚡ Đang tải...', 'no_data': 'Không có dữ liệu', 'items': 'khoản',
+            'confirm_upload': 'Ghi đè toàn bộ dữ liệu bằng file "$0"?\nHành động này không thể hoàn tác!',
+            'upload_ok': 'Upload thành công! Trang sẽ tải lại.',
+        },
+        'en': {
+            'income': 'Income', 'expense': 'Expense',
+            'inc_donut': 'Income by source', 'exp_donut': 'Expenses by category',
+            'import_done': 'Import done: $0 succeeded, $1 failed',
+            'err': 'Error', 'confirm_del': 'Delete this transaction?',
+            'add_crypto': '➕ Add Crypto Trade',
+            'edit_crypto': '✏️ Edit Crypto Trade',
+            'edit_income': '✏️ Edit Income',
+            'edit_expense': '✏️ Edit Expense',
+            'type': 'Type', 'buy': 'Buy', 'sell': 'Sell',
+            'qty': 'Quantity', 'price_usd': 'Price (USD)', 'fee_usd': 'Fee (USD)',
+            'cg_id': 'CoinGecko ID (optional)', 'note': 'Note', 'date': 'Date',
+            'amount': 'Amount', 'amount_vnd': 'Amount (VND)',
+            'source': 'Source', 'category': 'Category',
+            'loading': '⚡ Loading...', 'no_data': 'No data', 'items': 'items',
+            'confirm_upload': 'Overwrite all data with file "$0"?\nThis action cannot be undone!',
+            'upload_ok': 'Upload successful! Page will reload.',
+        },
+    }
+    _js_lang = lang if lang in _js_strings else 'vi'
+    js_txt = json.dumps(_js_strings[_js_lang], ensure_ascii=False)
+
+    # ── Assemble HTML ────────────────────────────────
     return f"""<!DOCTYPE html>
-<html lang="vi">
+<html lang="{lang}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1577,10 +1774,10 @@ label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
 </head>
 <body>
 <h1>&#x1F916; Univer Bot Dashboard</h1>
-<div class="subtitle">{uid_note} &middot; C&#x1EAD;p nh&#x1EAD;t: {ts}</div>
+<div class="subtitle">{uid_note} &middot; {L['updated']}: {ts}</div>
 <div style="text-align:center;margin-bottom:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
-  <button class="btn-sec" onclick="downloadDB()" style="font-size:.82em">&#x1F4BE; T&#x1EA3;i xu&#x1ED1;ng DB</button>
-  <label class="btn-sec" style="cursor:pointer;font-size:.82em">&#x2B06;&#xFE0F; Upload DB (ghi &#x111;&#xE8;)
+  <button class="btn-sec" onclick="downloadDB()" style="font-size:.82em">{L['dl_db']}</button>
+  <label class="btn-sec" style="cursor:pointer;font-size:.82em">{L['ul_db']}
     <input type="file" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadDB(this)">
   </label>
 </div>
@@ -1592,59 +1789,59 @@ label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
 <!-- Finance filter + tables (dynamic) -->
 <div class="card" id="financeSection">
   <div class="card-hdr">
-    <h2>&#x1F4CA; L&#x1ECD;c Thu Chi</h2>
+    <h2>{L['filter_title']}</h2>
     <div class="btns">
-      <button class="btn-pri" onclick="openAddFinance('income')">&#x2795; Thu nh&#x1EAD;p</button>
-      <button class="btn-pri" style="background:#ff4757" onclick="openAddFinance('expense')">&#x2795; Chi ti&#xEA;u</button>
+      <button class="btn-pri" onclick="openAddFinance('income')">{L['btn_income']}</button>
+      <button class="btn-pri" style="background:#ff4757" onclick="openAddFinance('expense')">{L['btn_expense']}</button>
       <button class="btn-sec" onclick="exportData('finance','csv')">&#x2B07;&#xFE0F; CSV</button>
       <button class="btn-sec" onclick="exportData('finance','excel')">&#x2B07;&#xFE0F; Excel</button>
-      <label class="btn-sec" style="cursor:pointer">&#x2B06;&#xFE0F; Nh&#x1EAD;p file<input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('finance',this)"></label>
+      <label class="btn-sec" style="cursor:pointer">{L['btn_import']}<input type="file" accept=".csv,.xlsx" style="display:none" onchange="importFile('finance',this)"></label>
     </div>
   </div>
 
   <div class="quick-btns">
-    <button class="qbtn" onclick="setQuick('thismonth')">Th&#xE1;ng n&#xE0;y</button>
-    <button class="qbtn" onclick="setQuick('lastmonth')">Th&#xE1;ng tr&#432;&#x1EDB;c</button>
-    <button class="qbtn" onclick="setQuick('thisquarter')">Qu&#xFD; n&#xE0;y</button>
-    <button class="qbtn" onclick="setQuick('thisyear')">N&#x103;m nay</button>
-    <button class="qbtn" onclick="setQuick('lastyear')">N&#x103;m ngo&#xE1;i</button>
-    <button class="qbtn" onclick="setQuick('all')">T&#x1EA5;t c&#x1EA3;</button>
+    <button class="qbtn" onclick="setQuick('thismonth')">{L['qb_thismonth']}</button>
+    <button class="qbtn" onclick="setQuick('lastmonth')">{L['qb_lastmonth']}</button>
+    <button class="qbtn" onclick="setQuick('thisquarter')">{L['qb_thisquarter']}</button>
+    <button class="qbtn" onclick="setQuick('thisyear')">{L['qb_thisyear']}</button>
+    <button class="qbtn" onclick="setQuick('lastyear')">{L['qb_lastyear']}</button>
+    <button class="qbtn" onclick="setQuick('all')">{L['qb_all']}</button>
   </div>
 
   <div class="filter-bar">
-    <div class="fgroup"><label>T&#x1EEB; ng&#xE0;y</label><input type="date" id="fDateFrom"></div>
-    <div class="fgroup"><label>&#x110;&#x1EBF;n ng&#xE0;y</label><input type="date" id="fDateTo"></div>
-    <div class="fgroup" style="min-width:150px"><label>Ngu&#x1ED3;n thu nh&#x1EAD;p</label>
-      <select id="fIncCat"><option value="">-- T&#x1EA5;t c&#x1EA3; --</option></select></div>
-    <div class="fgroup" style="min-width:150px"><label>Danh m&#x1EE5;c chi ti&#xEA;u</label>
-      <select id="fExpCat"><option value="">-- T&#x1EA5;t c&#x1EA3; --</option></select></div>
-    <div class="fgroup" style="min-width:160px"><label>T&#xEC;m ki&#x1EBF;m</label>
-      <input type="text" id="fSearch" placeholder="Ghi ch&#xFA;, ngu&#x1ED3;n..." onkeydown="if(event.key==='Enter')applyFilter()"></div>
+    <div class="fgroup"><label>{L['lbl_from']}</label><input type="date" id="fDateFrom"></div>
+    <div class="fgroup"><label>{L['lbl_to']}</label><input type="date" id="fDateTo"></div>
+    <div class="fgroup" style="min-width:150px"><label>{L['lbl_inc_src']}</label>
+      <select id="fIncCat"><option value="">{L['opt_all']}</option></select></div>
+    <div class="fgroup" style="min-width:150px"><label>{L['lbl_exp_cat']}</label>
+      <select id="fExpCat"><option value="">{L['opt_all']}</option></select></div>
+    <div class="fgroup" style="min-width:160px"><label>{L['lbl_search']}</label>
+      <input type="text" id="fSearch" placeholder="{L['ph_search']}" onkeydown="if(event.key==='Enter')applyFilter()"></div>
     <div class="fgroup" style="justify-content:flex-end;padding-top:16px">
-      <button class="btn-pri" onclick="applyFilter()" style="padding:6px 16px">&#x1F50D; L&#x1ECD;c</button>
+      <button class="btn-pri" onclick="applyFilter()" style="padding:6px 16px">{L['btn_filter']}</button>
     </div>
   </div>
 
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px" id="financeTables">
     <div>
-      <h3 class="sub-h">&#x1F4B0; Thu Nh&#x1EAD;p</h3>
+      <h3 class="sub-h">{L['tbl_income']}</h3>
       <div style="overflow-x:auto">
-        <table><thead><tr><th>Ng&#xE0;y</th><th>Ngu&#x1ED3;n</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th></th></tr></thead>
-        <tbody id="incTbody"><tr><td colspan="5" class="empty">&#x26A1; &#x110;ang t&#x1EA3;i...</td></tr></tbody></table>
+        <table><thead><tr><th>{L['col_date']}</th><th>{L['col_src']}</th><th>{L['col_note']}</th><th>{L['col_amount']}</th><th></th></tr></thead>
+        <tbody id="incTbody"><tr><td colspan="5" class="empty">{L['loading']}</td></tr></tbody></table>
       </div>
-      <div class="tbl-footer"><span id="incCount">0 kho&#x1EA3;n</span><span class="total-val green" id="incTotal">0 &#x111;</span></div>
+      <div class="tbl-footer"><span id="incCount">0 {L['items']}</span><span class="total-val green" id="incTotal">0 &#x111;</span></div>
     </div>
     <div>
-      <h3 class="sub-h">&#x1F4B8; Chi Ti&#xEA;u</h3>
+      <h3 class="sub-h">{L['tbl_expense']}</h3>
       <div style="overflow-x:auto">
-        <table><thead><tr><th>Ng&#xE0;y</th><th>Danh m&#x1EE5;c</th><th>Ghi ch&#xFA;</th><th>S&#x1ED1; ti&#x1EC1;n</th><th></th></tr></thead>
-        <tbody id="expTbody"><tr><td colspan="5" class="empty">&#x26A1; &#x110;ang t&#x1EA3;i...</td></tr></tbody></table>
+        <table><thead><tr><th>{L['col_date']}</th><th>{L['col_cat']}</th><th>{L['col_note']}</th><th>{L['col_amount']}</th><th></th></tr></thead>
+        <tbody id="expTbody"><tr><td colspan="5" class="empty">{L['loading']}</td></tr></tbody></table>
       </div>
-      <div class="tbl-footer"><span id="expCount">0 kho&#x1EA3;n</span><span class="total-val red" id="expTotal">0 &#x111;</span></div>
+      <div class="tbl-footer"><span id="expCount">0 {L['items']}</span><span class="total-val red" id="expTotal">0 &#x111;</span></div>
     </div>
   </div>
   <div class="tbl-footer" style="margin-top:14px;border-top:2px solid #00d4ff;padding-top:12px">
-    <span style="color:#e8e8e8;font-weight:600">C&#xE2;n &#x111;&#x1ED1;i</span>
+    <span style="color:#e8e8e8;font-weight:600">{L['net_lbl']}</span>
     <span class="total-val" id="netTotal" style="color:#00d4ff">0 &#x111;</span>
   </div>
 </div>
@@ -1657,8 +1854,8 @@ label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
     <h3 id="modalTitle" style="color:#00d4ff;margin-bottom:16px"></h3>
     <div id="modalBody"></div>
     <div style="margin-top:20px;display:flex;gap:10px;justify-content:flex-end">
-      <button onclick="closeModal()" class="btn-sec">H&#x1EE7;y</button>
-      <button onclick="submitModal()" class="btn-pri">L&#432;u</button>
+      <button onclick="closeModal()" class="btn-sec">{L['btn_cancel']}</button>
+      <button onclick="submitModal()" class="btn-pri">{L['btn_save']}</button>
     </div>
   </div>
 </div>
@@ -1667,13 +1864,14 @@ label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
 const D={charts_json};
 const PAL=['#00d4ff','#00ff88','#ffa502','#ff4757','#a29bfe','#fd79a8','#55efc4','#fdcb6e','#e17055','#74b9ff','#b2bec3','#fab1a0'];
 const fmtK=v=>v>=1e9?(v/1e9).toFixed(1)+'B':v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':v;
+const TXT={js_txt};
 
 if(D.trend){{
   new Chart(document.getElementById('trendChart'),{{
     type:'bar',
     data:{{labels:D.trend.labels,datasets:[
-      {{label:'Thu nhập',data:D.trend.income,backgroundColor:'rgba(0,255,136,.65)',borderColor:'#00ff88',borderWidth:1,borderRadius:4}},
-      {{label:'Chi ti\xeau',data:D.trend.expense,backgroundColor:'rgba(255,71,87,.65)',borderColor:'#ff4757',borderWidth:1,borderRadius:4}},
+      {{label:TXT.income,data:D.trend.income,backgroundColor:'rgba(0,255,136,.65)',borderColor:'#00ff88',borderWidth:1,borderRadius:4}},
+      {{label:TXT.expense,data:D.trend.expense,backgroundColor:'rgba(255,71,87,.65)',borderColor:'#ff4757',borderWidth:1,borderRadius:4}},
     ]}},
     options:{{responsive:true,maintainAspectRatio:false,
       plugins:{{legend:{{labels:{{color:'#e8e8e8',font:{{size:12}}}}}}}},
@@ -1697,8 +1895,8 @@ function donut(id,title,data){{
     }}
   }});
 }}
-donut('incDonut','Thu nhập theo nguồn',D.inc_donut);
-donut('expDonut','Chi ti\xeau theo danh mục',D.exp_donut);
+donut('incDonut',TXT.inc_donut,D.inc_donut);
+donut('expDonut',TXT.exp_donut,D.exp_donut);
 
 // ── CRUD JS ──────────────────────────────────────────
 const UID=new URLSearchParams(location.search).get('user_id')||'';
@@ -1726,8 +1924,8 @@ function importFile(scope,input){{
     let bin=''; bytes.forEach(b=>bin+=String.fromCharCode(b));
     const b64=btoa(bin);
     api('/api/import',{{scope,format:fmt,data:b64}})
-      .then(r=>{{alert(`Nhập xong: ${{r.imported||0}} th\xe0nh c\xf4ng, ${{r.failed||0}} lỗi`);location.reload();  }})
-      .catch(e=>alert('Lỗi: '+e));
+      .then(r=>{{alert(TXT.import_done.replace('$0',r.imported||0).replace('$1',r.failed||0));location.reload();  }})
+      .catch(e=>alert(TXT.err+': '+e));
   }};
   reader.readAsArrayBuffer(file);
 }}
@@ -1738,17 +1936,17 @@ function closeModal(){{document.getElementById('modal').style.display='none';}}
 
 function openAddCrypto(){{
   _ms={{action:'add',scope:'crypto'}};
-  document.getElementById('modalTitle').textContent='➕ Th\xeam Giao Dịch Crypto';
+  document.getElementById('modalTitle').textContent=TXT.add_crypto;
   const today=new Date().toISOString().slice(0,10);
   document.getElementById('modalBody').innerHTML=`
     <label>Symbol<input id="f_symbol" class="finput" placeholder="BTC"></label>
-    <label>Loại<select id="f_side" class="finput"><option value="BUY">Mua</option><option value="SELL">B\xe1n</option></select></label>
-    <label>Số lượng<input id="f_qty" class="finput" type="number" step="any"></label>
-    <label>Gi\xe1 (USD)<input id="f_price" class="finput" type="number" step="any"></label>
-    <label>Ph\xed (USD)<input id="f_fee" class="finput" type="number" step="any" value="0"></label>
-    <label>CoinGecko ID (tỹ chọn nếu trống)<input id="f_cgid" class="finput" placeholder="bitcoin"></label>
-    <label>Ghi ch\xfa<input id="f_note" class="finput"></label>
-    <label>Ng\xe0y<input id="f_date" class="finput" type="date" value="${{today}}"></label>
+    <label>${{TXT.type}}<select id="f_side" class="finput"><option value="BUY">${{TXT.buy}}</option><option value="SELL">${{TXT.sell}}</option></select></label>
+    <label>${{TXT.qty}}<input id="f_qty" class="finput" type="number" step="any"></label>
+    <label>${{TXT.price_usd}}<input id="f_price" class="finput" type="number" step="any"></label>
+    <label>${{TXT.fee_usd}}<input id="f_fee" class="finput" type="number" step="any" value="0"></label>
+    <label>${{TXT.cg_id}}<input id="f_cgid" class="finput" placeholder="bitcoin"></label>
+    <label>${{TXT.note}}<input id="f_note" class="finput"></label>
+    <label>${{TXT.date}}<input id="f_date" class="finput" type="date" value="${{today}}"></label>
   `;
   document.getElementById('modal').style.display='flex';
 }}
@@ -1756,28 +1954,28 @@ function openAddCrypto(){{
 function openEdit(scope,data){{
   _ms={{action:'edit',scope,data}};
   if(scope==='crypto'){{
-    document.getElementById('modalTitle').textContent='✏️ Sửa Giao Dịch Crypto';
+    document.getElementById('modalTitle').textContent=TXT.edit_crypto;
     document.getElementById('modalBody').innerHTML=`
-      <label>Số lượng<input id="f_qty" class="finput" type="number" step="any" value="${{data.qty}}"></label>
-      <label>Gi\xe1 (USD)<input id="f_price" class="finput" type="number" step="any" value="${{data.price}}"></label>
-      <label>Ph\xed (USD)<input id="f_fee" class="finput" type="number" step="any" value="${{data.fee}}"></label>
-      <label>Ghi ch\xfa<input id="f_note" class="finput" value="${{data.note||''}}"></label>
+      <label>${{TXT.qty}}<input id="f_qty" class="finput" type="number" step="any" value="${{data.qty}}"></label>
+      <label>${{TXT.price_usd}}<input id="f_price" class="finput" type="number" step="any" value="${{data.price}}"></label>
+      <label>${{TXT.fee_usd}}<input id="f_fee" class="finput" type="number" step="any" value="${{data.fee}}"></label>
+      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{data.note||''}}"></label>
     `;
   }} else if(scope==='income'){{
-    document.getElementById('modalTitle').textContent='✏️ Sửa Thu Nhập';
+    document.getElementById('modalTitle').textContent=TXT.edit_income;
     document.getElementById('modalBody').innerHTML=`
-      <label>Số tiền<input id="f_amount" class="finput" type="number" step="any" value="${{data.amount}}"></label>
-      <label>Nguồn<input id="f_cat" class="finput" value="${{data.cat||''}}"></label>
-      <label>Ghi ch\xfa<input id="f_note" class="finput" value="${{data.note||''}}"></label>
-      <label>Ng\xe0y<input id="f_date" class="finput" type="date" value="${{(data.date||'').slice(0,10)}}"></label>
+      <label>${{TXT.amount}}<input id="f_amount" class="finput" type="number" step="any" value="${{data.amount}}"></label>
+      <label>${{TXT.source}}<input id="f_cat" class="finput" value="${{data.cat||''}}"></label>
+      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{data.note||''}}"></label>
+      <label>${{TXT.date}}<input id="f_date" class="finput" type="date" value="${{(data.date||'').slice(0,10)}}"></label>
     `;
   }} else {{
-    document.getElementById('modalTitle').textContent='✏️ Sửa Chi Ti\xeau';
+    document.getElementById('modalTitle').textContent=TXT.edit_expense;
     document.getElementById('modalBody').innerHTML=`
-      <label>Số tiền<input id="f_amount" class="finput" type="number" step="any" value="${{data.amount}}"></label>
-      <label>Danh mục<input id="f_cat" class="finput" value="${{data.cat||''}}"></label>
-      <label>Ghi ch\xfa<input id="f_note" class="finput" value="${{data.note||''}}"></label>
-      <label>Ng\xe0y<input id="f_date" class="finput" type="date" value="${{(data.date||'').slice(0,10)}}"></label>
+      <label>${{TXT.amount}}<input id="f_amount" class="finput" type="number" step="any" value="${{data.amount}}"></label>
+      <label>${{TXT.category}}<input id="f_cat" class="finput" value="${{data.cat||''}}"></label>
+      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{data.note||''}}"></label>
+      <label>${{TXT.date}}<input id="f_date" class="finput" type="date" value="${{(data.date||'').slice(0,10)}}"></label>
     `;
   }}
   document.getElementById('modal').style.display='flex';
@@ -1785,15 +1983,15 @@ function openEdit(scope,data){{
 
 function openAddFinance(ttype){{
   _ms={{action:'add',scope:'finance',ttype}};
-  const label=ttype==='income'?'Thu Nhập':'Chi Ti\xeau';
-  const catLabel=ttype==='income'?'Nguồn':'Danh mục';
+  const label=ttype==='income'?TXT.income:TXT.expense;
+  const catLabel=ttype==='income'?TXT.source:TXT.category;
   const today=new Date().toISOString().slice(0,10);
-  document.getElementById('modalTitle').textContent=`➕ Th\xeam ${{label}}`;
+  document.getElementById('modalTitle').textContent=`➕ ${{label}}`;
   document.getElementById('modalBody').innerHTML=`
-    <label>Số tiền (VND)<input id="f_amount" class="finput" type="number" step="any"></label>
+    <label>${{TXT.amount_vnd}}<input id="f_amount" class="finput" type="number" step="any"></label>
     <label>${{catLabel}}<input id="f_cat" class="finput"></label>
-    <label>Ghi ch\xfa<input id="f_note" class="finput"></label>
-    <label>Ng\xe0y<input id="f_date" class="finput" type="date" value="${{today}}"></label>
+    <label>${{TXT.note}}<input id="f_note" class="finput"></label>
+    <label>${{TXT.date}}<input id="f_date" class="finput" type="date" value="${{today}}"></label>
   `;
   document.getElementById('modal').style.display='flex';
 }}
@@ -1831,20 +2029,20 @@ async function submitModal(){{
       closeModal();
       if(s.scope==='crypto'||s.scope==='crypto_edit') location.reload();
       else applyFilter();
-    }}else alert('Lỗi: '+(r.error||'unknown'));
+    }}else alert(TXT.err+': '+(r.error||'unknown'));
   }}catch(e){{alert('Lỗi: '+e);}}
 }}
 
 async function deleteCrypto(id){{
-  if(!confirm('X\xf3a giao dịch n\xe0y?')) return;
+  if(!confirm(TXT.confirm_del)) return;
   const r=await api('/api/crypto/delete',{{id}});
-  if(r.ok) location.reload(); else alert('Lỗi: '+r.error);
+  if(r.ok) location.reload(); else alert(TXT.err+': '+r.error);
 }}
 
 async function deleteFinance(id,ttype){{
-  if(!confirm('X\xf3a giao dịch n\xe0y?')) return;
+  if(!confirm(TXT.confirm_del)) return;
   const r=await api('/api/finance/delete',{{id,ttype}});
-  if(r.ok) applyFilter(); else alert('Lỗi: '+r.error);
+  if(r.ok) applyFilter(); else alert(TXT.err+': '+r.error);
 }}
 
 function v(id){{const el=document.getElementById(id);return el?el.value:'';}}
@@ -1911,8 +2109,8 @@ async function applyFilter(){{
   const qInc=new URLSearchParams({{user_id:UID,token:TOK,ttype:'income',date_from:from,date_to:to,category:incCat,search,limit:500}});
   const qExp=new URLSearchParams({{user_id:UID,token:TOK,ttype:'expense',date_from:from,date_to:to,category:expCat,search,limit:500}});
 
-  document.getElementById('incTbody').innerHTML='<tr><td colspan="5" class="empty">Đang tải...</td></tr>';
-  document.getElementById('expTbody').innerHTML='<tr><td colspan="5" class="empty">Đang tải...</td></tr>';
+  document.getElementById('incTbody').innerHTML=`<tr><td colspan="5" class="empty">${{TXT.loading}}</td></tr>`;
+  document.getElementById('expTbody').innerHTML=`<tr><td colspan="5" class="empty">${{TXT.loading}}</td></tr>`;
 
   const [rInc,rExp]=await Promise.all([
     fetch(`/api/finance/list?${{qInc}}`).then(r=>r.json()),
@@ -1925,8 +2123,8 @@ async function applyFilter(){{
   const incT=rInc.income_total||0;
   const expT=rExp.expense_total||0;
   const net=incT-expT;
-  document.getElementById('incCount').textContent=(rInc.income||[]).length+' khoản';
-  document.getElementById('expCount').textContent=(rExp.expense||[]).length+' khoản';
+  document.getElementById('incCount').textContent=(rInc.income||[]).length+' '+TXT.items;
+  document.getElementById('expCount').textContent=(rExp.expense||[]).length+' '+TXT.items;
   document.getElementById('incTotal').textContent=fmtVND(incT);
   document.getElementById('expTotal').textContent=fmtVND(expT);
   const netEl=document.getElementById('netTotal');
@@ -1936,7 +2134,7 @@ async function applyFilter(){{
 
 function renderTable(tbodyId,rows,ttype){{
   const tb=document.getElementById(tbodyId);
-  if(!rows.length){{tb.innerHTML='<tr><td colspan="5" class="empty">Không có dữ liệu</td></tr>';return;}}
+  if(!rows.length){{tb.innerHTML=`<tr><td colspan="5" class="empty">${{TXT.no_data}}</td></tr>`;return;}}
   const colorCls=ttype==='income'?'green':'red';
   tb.innerHTML=rows.map(r=>{{
     const safeC=(r.cat||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;");
@@ -1954,9 +2152,9 @@ function renderTable(tbodyId,rows,ttype){{
 }}
 
 async function deleteFinanceR(id,ttype){{
-  if(!confirm('Xóa giao dịch này?')) return;
+  if(!confirm(TXT.confirm_del)) return;
   const r=await api('/api/finance/delete',{{id,ttype}});
-  if(r.ok) applyFilter(); else alert('Lỗi: '+r.error);
+  if(r.ok) applyFilter(); else alert(TXT.err+': '+r.error);
 }}
 
 // ── DB backup / restore ──────────────────────────────
@@ -1966,7 +2164,7 @@ function downloadDB(){{
 
 function uploadDB(input){{
   const file=input.files[0]; if(!file) return;
-  if(!confirm(`Ghi đè toàn bộ dữ liệu bằng file "${{file.name}}"?\nHành động này không thể hoàn tác!`)) return;
+  if(!confirm(TXT.confirm_upload.replace('$0',file.name))) return;
   const reader=new FileReader();
   reader.onload=async e=>{{
     const bytes=new Uint8Array(e.target.result);
@@ -1974,9 +2172,9 @@ function uploadDB(input){{
     const b64=btoa(bin);
     try{{
       const r=await api('/api/db/upload',{{data:b64}});
-      if(r.ok){{ alert('Upload thành công! Trang sẽ tải lại.'); location.reload(); }}
-      else alert('Lỗi: '+(r.error||'unknown'));
-    }}catch(e){{ alert('Lỗi: '+e); }}
+      if(r.ok){{ alert(TXT.upload_ok); location.reload(); }}
+      else alert(TXT.err+': '+(r.error||'unknown'));
+    }}catch(e){{ alert(TXT.err+': '+e); }}
   }};
   reader.readAsArrayBuffer(file);
   input.value='';
@@ -2052,7 +2250,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(db_get_finance_categories(uid) if uid else {"income":[],"expense":[]}); return
         if parsed.path == "/api/db/download":
             self._handle_db_download(); return
-        html = _make_html(uid).encode("utf-8")
+        dash_lang = db_get_lang(uid) if uid else 'vi'
+        html = _make_html(uid, lang=dash_lang).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(html)))
@@ -2443,6 +2642,7 @@ def home_keyboard(lang: str = 'en') -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
         [KeyboardButton(s['btn_crypto'])],
         [KeyboardButton(s['btn_finance'])],
+        [KeyboardButton(s['btn_settings'])],
     ], resize_keyboard=True)
 
 def main_menu_keyboard(lang: str = 'en') -> ReplyKeyboardMarkup:
@@ -2813,6 +3013,45 @@ async def handle_back_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     lang = db_get_lang(uid); context.user_data.pop('submenu', None); context.user_data['lang'] = lang
     await update.message.reply_text(t('menu_home', uid), reply_markup=home_keyboard(lang))
+
+async def handle_settings_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(t('settings_btn_lang', uid),      callback_data="settings:lang")],
+        [InlineKeyboardButton(t('settings_btn_currency', uid),  callback_data="settings:currency")],
+        [InlineKeyboardButton(t('settings_btn_dashboard', uid), callback_data="settings:dashboard")],
+    ])
+    await update.message.reply_text(t('settings_title', uid), parse_mode="Markdown", reply_markup=kb)
+
+async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    action = q.data.split(":")[1]
+    if action == "lang":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🇬🇧 English", callback_data="set_lang:en"),
+             InlineKeyboardButton("🇻🇳 Tiếng Việt", callback_data="set_lang:vi")],
+        ])
+        await q.edit_message_text(t('lang_choose', uid), reply_markup=kb)
+    elif action == "currency":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💵 USD ($)", callback_data="set_currency:USD"),
+             InlineKeyboardButton("🇻🇳 VND (đ)", callback_data="set_currency:VND")],
+        ])
+        await q.edit_message_text(t('currency_choose', uid), reply_markup=kb)
+    elif action == "dashboard":
+        lang = db_get_lang(uid)
+        token_part = f"&token={DASHBOARD_SECRET}" if DASHBOARD_SECRET else ""
+        link = f"http://localhost:{HTML_PORT}?user_id={uid}{token_part}"
+        secret_note = (t('dashboard_secret', uid).format(secret=DASHBOARD_SECRET)
+                       if DASHBOARD_SECRET else t('dashboard_no_secret', uid))
+        text = (
+            f"{t('dashboard_title', uid)}\n\n"
+            f"{t('dashboard_id', uid).format(uid=uid)}\n"
+            f"{t('dashboard_link', uid).format(link=link)}{secret_note}\n\n"
+            f"{t('dashboard_features', uid)}"
+        )
+        await q.edit_message_text(text, parse_mode="Markdown")
 
 async def handle_budget_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -3730,6 +3969,8 @@ def build_app() -> "Application":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_crypto')), handle_home_crypto_btn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_finance')), handle_home_finance_btn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_back')), handle_back_btn))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_settings')), handle_settings_btn))
+    app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_budget')), handle_budget_btn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_recurring')), handle_recurring_btn))
 
