@@ -2207,6 +2207,280 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
 # ── SECTION 3: _make_html (full replacement) ───────────
 
+# ===================== AIOHTTP UNIFIED SERVER (webhook mode) =====================
+# In webhook mode a single aiohttp server handles BOTH Telegram webhook
+# updates and the HTML dashboard, so only one public port is needed.
+
+_ptb_app_ref = None  # set by run_with_webhook()
+
+def _aio_check_auth(qs) -> bool:
+    if not DASHBOARD_SECRET: return True
+    return qs.get("token", "") == DASHBOARD_SECRET
+
+def _aio_uid(qs):
+    try: return int(qs.get("user_id", ""))
+    except: return None
+
+def _dash_export_bytes(uid, scope: str, fmt: str):
+    """Return (body_bytes, content_type, filename)."""
+    if scope == "crypto":
+        rows  = db_crypto_all_trades(uid) if uid else []
+        heads = ["symbol","cg_id","side","qty","price_usd","fee_usd","note","created_at"]
+    else:
+        rows  = db_export_data(uid) if uid else []
+        heads = ["Loại","Số tiền","Ghi chú","Danh mục/Nguồn","Ngày","ID"]
+    fname = f"{scope}_export"
+    if fmt == "excel":
+        from openpyxl import Workbook
+        wb = Workbook(); ws = wb.active
+        ws.title = scope.capitalize(); ws.append(heads)
+        for r in rows: ws.append(list(r))
+        buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+        return (buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fname + ".xlsx")
+    buf = io.StringIO(); w = csv.writer(buf); w.writerow(heads)
+    for r in rows: w.writerow(list(r))
+    return (("﻿" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8-sig", fname + ".csv")
+
+def _dash_finance_list_sync(uid, qs) -> dict:
+    ttype     = qs.get("ttype",     "all")
+    date_from = (qs.get("date_from","") or "").strip() or None
+    date_to   = (qs.get("date_to",  "") or "").strip() or None
+    category  = (qs.get("category", "") or "").strip() or None
+    search    = (qs.get("search",   "") or "").strip() or None
+    limit     = int(qs.get("limit", 500) or 500)
+    result: dict = {}
+    if ttype in ("income", "all"):
+        rows = db_get_incomes_filtered(uid, date_from, date_to, category if ttype == "income" else None, search, limit)
+        result["income"] = [{"id":r[0],"amount":r[1],"cat":r[2],"note":r[3],"date":str(r[4])[:10]} for r in rows]
+        result["income_total"] = sum(r[1] for r in rows)
+    if ttype in ("expense", "all"):
+        rows = db_get_expenses_filtered(uid, date_from, date_to, category if ttype == "expense" else None, search, limit)
+        result["expense"] = [{"id":r[0],"amount":r[1],"cat":r[2],"note":r[3],"date":str(r[4])[:10]} for r in rows]
+        result["expense_total"] = sum(r[1] for r in rows)
+    return result
+
+def _dash_post_sync(uid, path: str, body: dict) -> dict:
+    """Handles all dashboard POST API calls, returns JSON-serialisable dict."""
+    import base64
+    # ── crypto ──
+    if path == "/api/crypto/add":
+        if not uid: return {"error": "no user_id"}
+        sym = str(body.get("symbol","")).strip().upper()
+        side = str(body.get("side","BUY")).strip().upper()
+        qty = float(body.get("qty",0)); price = float(body.get("price",0))
+        fee = float(body.get("fee",0) or 0); note = str(body.get("note","") or "")
+        cg = str(body.get("cg_id","") or "").strip() or None
+        ds = str(body.get("date","") or "").strip()
+        if not sym or qty <= 0 or price < 0: return {"error":"symbol/qty/price invalid"}
+        if not cg: cg = db_crypto_get_map(sym) or cg_guess_id_from_symbol(sym)
+        try: dt = datetime.datetime.fromisoformat(ds) if ds else datetime.datetime.now()
+        except: dt = datetime.datetime.now()
+        db_crypto_add_trade(uid, sym, side, qty, price, note, dt, cg, fee)
+        if cg: db_crypto_upsert_map(sym, cg)
+        return {"ok": True}
+    if path == "/api/crypto/delete":
+        tid = int(body.get("id",0))
+        if not tid: return {"error":"no id"}
+        db_crypto_delete_trade(tid); return {"ok": True}
+    if path == "/api/crypto/update":
+        tid = int(body.get("id",0))
+        if not tid: return {"error":"no id"}
+        db_crypto_update_trade(tid, float(body.get("qty",0)), float(body.get("price",0)),
+                               float(body.get("fee",0) or 0), str(body.get("note","") or ""))
+        return {"ok": True}
+    # ── finance ──
+    if path == "/api/finance/add":
+        if not uid: return {"error":"no user_id"}
+        ttype = str(body.get("ttype","expense")); amt = float(body.get("amount",0))
+        cat = str(body.get("category","") or ""); note = str(body.get("note","") or "")
+        ds = str(body.get("date","") or "").strip()
+        if amt <= 0: return {"error":"amount must be > 0"}
+        try: dt = datetime.datetime.fromisoformat(ds) if ds else datetime.datetime.now()
+        except: dt = datetime.datetime.now()
+        if ttype == "income": db_add_income(uid, amt, cat or "Khác", note, dt)
+        else: db_add_expense(uid, amt, note, cat or "Khác", dt)
+        return {"ok": True}
+    if path == "/api/finance/delete":
+        rid = int(body.get("id",0)); ttype = str(body.get("ttype","expense"))
+        if not rid: return {"error":"no id"}
+        db_delete_transaction(rid, ttype); return {"ok": True}
+    if path == "/api/finance/update":
+        rid = int(body.get("id",0)); ttype = str(body.get("ttype","expense"))
+        amt = float(body.get("amount",0)); cat = str(body.get("category","") or "")
+        note = str(body.get("note","") or ""); ds = str(body.get("date","") or "").strip()
+        if not rid: return {"error":"no id"}
+        if not ds: ds = datetime.datetime.now().isoformat()
+        if ttype == "income": db_update_income(rid, amt, cat or "Khác", note, ds)
+        else: db_update_expense(rid, amt, cat or "Khác", note, ds)
+        return {"ok": True}
+    # ── import ──
+    if path == "/api/import":
+        if not uid: return {"error":"no user_id"}
+        scope = str(body.get("scope","finance")); fmt = str(body.get("format","csv"))
+        try: raw = base64.b64decode(str(body.get("data","")))
+        except Exception as e: return {"error": f"base64: {e}"}
+        imported = failed = 0
+        try:
+            if fmt == "excel":
+                from openpyxl import load_workbook as _lw
+                wb = _lw(filename=io.BytesIO(raw), read_only=True, data_only=True); ws = wb.active
+                hdrs = [str(c.value or "").strip().lower() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+                rows_it = ({hdrs[i]:v for i,v in enumerate(row) if i<len(hdrs)} for row in ws.iter_rows(min_row=2, values_only=True))
+            else:
+                rows_it = ({k.strip().lower():v for k,v in r.items()} for r in csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
+            for row in rows_it:
+                if all((v is None or str(v).strip()=="") for v in row.values()): continue
+                try:
+                    if scope == "crypto":
+                        sym=str(row.get("symbol") or row.get("asset") or "").strip().upper()
+                        side=str(row.get("side") or "BUY").strip().upper()
+                        qty=float(row.get("qty") or row.get("quantity") or 0)
+                        price=float(row.get("price_usd") or row.get("price") or 0)
+                        fee=float(row.get("fee_usd") or row.get("fee") or 0)
+                        note=str(row.get("note") or "")
+                        cg=str(row.get("cg_id") or "").strip() or None
+                        dat=str(row.get("created_at") or row.get("date") or "").strip()
+                        if not sym or qty<=0: failed+=1; continue
+                        try: cat=datetime.datetime.fromisoformat(dat) if dat else datetime.datetime.now()
+                        except: cat=datetime.datetime.now()
+                        cg=cg or db_crypto_get_map(sym) or cg_guess_id_from_symbol(sym)
+                        db_crypto_add_trade(uid,sym,side,qty,price,note,cat,cg,fee)
+                        if cg: db_crypto_upsert_map(sym,cg)
+                    else:
+                        ttype=str(row.get("type") or row.get("ttype") or row.get("loại") or "expense").strip()
+                        amount=float(row.get("amount") or row.get("số tiền") or row.get("số_tiền") or 0)
+                        cat_=str(row.get("cat_or_source") or row.get("category") or row.get("source") or row.get("danh mục/nguồn") or row.get("danh_mục/nguồn") or "Khác")
+                        note=str(row.get("note") or row.get("ghi chú") or row.get("ghi_chú") or "")
+                        dat=str(row.get("created_at") or row.get("date") or row.get("ngày") or "").strip()
+                        if amount<=0: failed+=1; continue
+                        try: cat_dt=datetime.datetime.fromisoformat(dat) if dat else datetime.datetime.now()
+                        except: cat_dt=datetime.datetime.now()
+                        is_inc=(ttype.upper().startswith("INC") or ttype.lower() in ("income","thu nhập","thu nhap"))
+                        if is_inc: db_add_income(uid,amount,cat_,note,cat_dt)
+                        else: db_add_expense(uid,amount,note,cat_,cat_dt)
+                    imported+=1
+                except: failed+=1
+        except Exception as e: return {"error":str(e),"imported":imported,"failed":failed}
+        return {"ok":True,"imported":imported,"failed":failed}
+    return {"error":"unknown path"}
+
+async def _aio_get(request):
+    from aiohttp import web
+    qs = request.rel_url.query
+    if not _aio_check_auth(qs):
+        return web.Response(status=403, text="403 Forbidden")
+    uid = _aio_uid(qs)
+    path = request.path
+    try:
+        if path == "/api/export":
+            scope = qs.get("scope","finance"); fmt = qs.get("format","csv")
+            data, ctype, fname = await asyncio.to_thread(_dash_export_bytes, uid, scope, fmt)
+            return web.Response(body=data, content_type=ctype.split(";")[0].strip(),
+                                headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                                         "Access-Control-Allow-Origin": "*"})
+        if path == "/api/finance/list":
+            if not uid: return web.Response(text='{"error":"no user_id"}', content_type="application/json")
+            result = await asyncio.to_thread(_dash_finance_list_sync, uid, qs)
+            return web.Response(text=json.dumps(result, ensure_ascii=False),
+                                content_type="application/json", charset="utf-8")
+        if path == "/api/finance/categories":
+            cats = await asyncio.to_thread(db_get_finance_categories, uid) if uid else {"income":[],"expense":[]}
+            return web.Response(text=json.dumps(cats, ensure_ascii=False),
+                                content_type="application/json", charset="utf-8")
+        html = await asyncio.to_thread(_make_html, uid)
+        return web.Response(text=html, content_type="text/html", charset="utf-8")
+    except Exception as exc:
+        logger.error(f"aio_get error: {exc}")
+        return web.Response(text=json.dumps({"error": str(exc)}), content_type="application/json", status=500)
+
+async def _aio_post(request):
+    from aiohttp import web
+    qs = request.rel_url.query
+    if not _aio_check_auth(qs):
+        return web.Response(status=403, text="403 Forbidden")
+    uid = _aio_uid(qs)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        return web.Response(text=json.dumps({"error": f"JSON: {exc}"}), content_type="application/json", status=400)
+    try:
+        result = await asyncio.to_thread(_dash_post_sync, uid, request.path, body)
+    except Exception as exc:
+        result = {"error": str(exc)}
+    return web.Response(text=json.dumps(result, ensure_ascii=False),
+                        content_type="application/json", charset="utf-8",
+                        headers={"Access-Control-Allow-Origin": "*"})
+
+async def _aio_telegram(request):
+    from aiohttp import web
+    if WEBHOOK_SECRET:
+        tok = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if tok != WEBHOOK_SECRET:
+            return web.Response(status=403, text="Forbidden")
+    try:
+        data = await request.json()
+        update = Update.de_json(data, _ptb_app_ref.bot)
+        await _ptb_app_ref.update_queue.put(update)
+    except Exception as exc:
+        logger.error(f"Telegram webhook error: {exc}")
+    return web.Response(text="OK")
+
+def _setup_job_queue(ptb_app) -> None:
+    jq = ptb_app.job_queue
+    if jq is None:
+        logger.warning("JobQueue không khả dụng — pip install 'python-telegram-bot[job-queue]'")
+        return
+    try:
+        import pytz; tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    except ImportError:
+        tz = datetime.timezone(datetime.timedelta(hours=7))
+    jq.run_daily(check_recurring_job, time=datetime.time(8, 0, tzinfo=tz), name="recurring_daily")
+    jq.run_once(check_recurring_job, when=5, name="recurring_startup")
+
+async def run_with_webhook(ptb_app) -> None:
+    global _ptb_app_ref
+    _ptb_app_ref = ptb_app
+    from aiohttp import web
+    _setup_job_queue(ptb_app)
+
+    wh_path = f"/wh/{BOT_TOKEN}"
+    aio_app = web.Application()
+    aio_app.router.add_post(wh_path,           _aio_telegram)
+    aio_app.router.add_get("/api/export",       _aio_get)
+    aio_app.router.add_get("/api/finance/list", _aio_get)
+    aio_app.router.add_get("/api/finance/categories", _aio_get)
+    aio_app.router.add_post("/api/{tail:.*}",   _aio_post)
+    aio_app.router.add_get("/{tail:.*}",        _aio_get)
+
+    runner = web.AppRunner(aio_app, access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
+    await site.start()
+    logger.info(f"Unified server on port {WEBHOOK_PORT} (webhook + dashboard)")
+
+    async with ptb_app:
+        await ptb_app.bot.set_webhook(
+            url=f"{WEBHOOK_URL}{wh_path}",
+            secret_token=WEBHOOK_SECRET or None,
+            allowed_updates=list(Update.ALL_TYPES),
+            drop_pending_updates=False,
+        )
+        logger.info(f"Webhook OK: {WEBHOOK_URL}{wh_path}")
+        logger.info(f"Dashboard:  {WEBHOOK_URL}?user_id=YOUR_ID")
+        await ptb_app.start()
+
+        stop_event = asyncio.Event()
+        import signal as _signal
+        loop = asyncio.get_running_loop()
+        for sig in (_signal.SIGINT, _signal.SIGTERM):
+            try: loop.add_signal_handler(sig, stop_event.set)
+            except (NotImplementedError, RuntimeError): pass
+
+        await stop_event.wait()
+        await ptb_app.stop()
+
+    await runner.cleanup()
+
 def start_html_server():
     global HTML_PORT
     for port in range(HTML_PORT, HTML_PORT + 10):
@@ -3797,33 +4071,15 @@ async def check_recurring_job(context: ContextTypes.DEFAULT_TYPE):
 
 # ===================== MAIN =====================
 if __name__ == "__main__":
-    start_html_server()
-    app = build_app()
-    # Schedule daily recurring check at 08:00 local time (UTC+7 Vietnam)
-    job_queue = app.job_queue
-    if job_queue is not None:
-        try:
-            import pytz
-            tz = pytz.timezone("Asia/Ho_Chi_Minh")
-        except ImportError:
-            tz = datetime.timezone(datetime.timedelta(hours=7))
-        trigger_time = datetime.time(hour=8, minute=0, tzinfo=tz)
-        job_queue.run_daily(check_recurring_job, time=trigger_time, name="recurring_daily")
-        job_queue.run_once(check_recurring_job, when=5, name="recurring_startup")
-    else:
-        logger.warning("JobQueue không khả dụng — cài lại: pip install 'python-telegram-bot[job-queue]'")
     if WEBHOOK_URL:
-        wh_path = f"/wh/{BOT_TOKEN}"
-        wh_full = f"{WEBHOOK_URL}{wh_path}"
-        logger.info(f"Webhook mode — {wh_full}  (port {WEBHOOK_PORT})")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=WEBHOOK_PORT,
-            url_path=wh_path,
-            webhook_url=wh_full,
-            secret_token=WEBHOOK_SECRET or None,
-            allowed_updates=Update.ALL_TYPES,
-        )
+        # Webhook mode: single aiohttp server handles Telegram + dashboard
+        app = build_app()
+        logger.info(f"Webhook mode — port {WEBHOOK_PORT}")
+        asyncio.run(run_with_webhook(app))
     else:
-        logger.info(f"Polling mode — HTML dashboard port {HTML_PORT}")
+        # Polling mode: separate thread for dashboard, PTB polls Telegram
+        start_html_server()
+        app = build_app()
+        _setup_job_queue(app)
+        logger.info(f"Polling mode — dashboard port {HTML_PORT}")
         app.run_polling(allowed_updates=Update.ALL_TYPES)
