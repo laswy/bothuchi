@@ -128,7 +128,132 @@ Rồi restart bot. Lưu ý: mỗi lần restart cloudflared thì phải đổi `
 
 ---
 
-## Railway.app (Dễ nhất)
+## Oracle Cloud Free Tier (VPS Miễn Phí Vĩnh Viễn — Khuyến nghị)
+
+**Ưu điểm:** 2 VM ARM miễn phí mãi mãi, 24GB RAM tổng, ổ cứng vĩnh viễn — DB không bao giờ mất.
+
+### Bước 1 — Tạo tài khoản & VM
+
+1. Đăng ký tại [cloud.oracle.com](https://cloud.oracle.com) (cần thẻ tín dụng để xác minh, **không bị trừ tiền**)
+2. Vào **Compute → Instances → Create Instance**
+3. Cấu hình:
+   - **Name**: `bothuchi`
+   - **Image**: Ubuntu 22.04 (hoặc 24.04)
+   - **Shape**: `VM.Standard.A1.Flex` (ARM — **Always Free**)
+     - OCPUs: 2 | Memory: 12 GB *(hoặc 4 OCPU / 24GB nếu chỉ tạo 1 VM)*
+   - **SSH keys**: tải lên public key của bạn (hoặc tạo mới và tải private key về)
+4. Bấm **Create** → chờ VM chạy → copy **Public IP**
+
+### Bước 2 — Mở port firewall Oracle
+
+Oracle có 2 lớp firewall, phải mở cả hai:
+
+**Lớp 1 — Security List (Oracle Console):**
+- Vào VM → **Subnet** → **Security List** → **Add Ingress Rules**
+- Thêm rule:
+  ```
+  Source CIDR: 0.0.0.0/0
+  Protocol: TCP
+  Port: 8080    ← dashboard
+  ```
+  *(Nếu dùng webhook trực tiếp, thêm thêm port 8443)*
+
+**Lớp 2 — iptables (trong VM):**
+```bash
+sudo iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
+sudo iptables -I INPUT -p tcp --dport 8443 -j ACCEPT
+sudo netfilter-persistent save
+```
+
+### Bước 3 — SSH vào VM và cài đặt tự động
+
+```bash
+ssh ubuntu@<PUBLIC_IP>
+
+# Tải script cài đặt tự động
+curl -O https://raw.githubusercontent.com/laswy/bothuchi/main/setup-oracle.sh
+chmod +x setup-oracle.sh
+./setup-oracle.sh
+```
+
+Script sẽ tự động:
+- Cài Python 3, git, pip, netfilter-persistent
+- Clone repo bothuchi
+- Tạo venv và cài thư viện
+- Tạo file `.env` và mở editor để bạn điền token
+- Cài systemd service tự khởi động
+
+### Bước 4 — Điền thông tin `.env`
+
+```env
+TELEGRAM_BOT_TOKEN=your_token_here
+
+# Để trống = dùng polling (đơn giản, không cần domain)
+# WEBHOOK_URL=
+
+# Dashboard
+HTML_PORT=8080
+DASHBOARD_SECRET=mat_khau_kho_doan
+
+# Kênh thông báo (tùy chọn)
+# CHANNEL_CHAT_ID=-1001xxxxxxxxx
+```
+
+> **Dùng polling là đủ** trên Oracle Cloud — bot chạy 24/7, DB không mất, dashboard tại `http://<IP>:8080?user_id=YOUR_ID`
+
+### Bước 5 — Khởi động bot
+
+```bash
+sudo systemctl start bothuchi
+sudo systemctl status bothuchi   # kiểm tra đang chạy
+sudo journalctl -u bothuchi -f   # xem log realtime
+```
+
+### Cập nhật code mới
+
+```bash
+cd ~/bothuchi
+git pull origin main
+sudo systemctl restart bothuchi
+```
+
+### (Tùy chọn) Webhook qua Cloudflare Tunnel
+
+Nếu muốn webhook thay polling mà **không cần mua domain**:
+
+```bash
+# Cài cloudflared
+curl -L https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared jammy main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt update && sudo apt install -y cloudflared
+
+# Đăng nhập và tạo tunnel
+cloudflared tunnel login
+cloudflared tunnel create bothuchi
+
+# Cài service
+sudo cloudflared service install
+```
+
+Cấu hình `~/.cloudflared/config.yml`:
+```yaml
+tunnel: <TUNNEL_ID>
+credentials-file: /home/ubuntu/.cloudflared/<TUNNEL_ID>.json
+ingress:
+  - hostname: bot.yourdomain.com
+    service: http://localhost:8443
+  - hostname: dash.yourdomain.com
+    service: http://localhost:8080
+  - service: http_status:404
+```
+
+Thêm vào `.env`:
+```env
+WEBHOOK_URL=https://bot.yourdomain.com
+WEBHOOK_PORT=8443
+```
+
+---
 
 1. Push code lên GitHub
 2. Vào [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**
