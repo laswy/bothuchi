@@ -1480,6 +1480,12 @@ label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
 <body>
 <h1>&#x1F916; Univer Bot Dashboard</h1>
 <div class="subtitle">{uid_note} &middot; C&#x1EAD;p nh&#x1EAD;t: {ts}</div>
+<div style="text-align:center;margin-bottom:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+  <button class="btn-sec" onclick="downloadDB()" style="font-size:.82em">&#x1F4BE; T&#x1EA3;i xu&#x1ED1;ng DB</button>
+  <label class="btn-sec" style="cursor:pointer;font-size:.82em">&#x2B06;&#xFE0F; Upload DB (ghi &#x111;&#xE8;)
+    <input type="file" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadDB(this)">
+  </label>
+</div>
 
 {crypto_summary_html}
 {crypto_trades_html}
@@ -1855,6 +1861,29 @@ async function deleteFinanceR(id,ttype){{
   if(r.ok) applyFilter(); else alert('Lỗi: '+r.error);
 }}
 
+// ── DB backup / restore ──────────────────────────────
+function downloadDB(){{
+  window.location.href=`/api/db/download?user_id=${{UID}}&token=${{TOK}}`;
+}}
+
+function uploadDB(input){{
+  const file=input.files[0]; if(!file) return;
+  if(!confirm(`Ghi đè toàn bộ dữ liệu bằng file "${{file.name}}"?\nHành động này không thể hoàn tác!`)) return;
+  const reader=new FileReader();
+  reader.onload=async e=>{{
+    const bytes=new Uint8Array(e.target.result);
+    let bin=''; bytes.forEach(b=>bin+=String.fromCharCode(b));
+    const b64=btoa(bin);
+    try{{
+      const r=await api('/api/db/upload',{{data:b64}});
+      if(r.ok){{ alert('Upload thành công! Trang sẽ tải lại.'); location.reload(); }}
+      else alert('Lỗi: '+(r.error||'unknown'));
+    }}catch(e){{ alert('Lỗi: '+e); }}
+  }};
+  reader.readAsArrayBuffer(file);
+  input.value='';
+}}
+
 // init
 loadCategories();
 // default: this month
@@ -1923,6 +1952,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             self._api_finance_list(uid, qs); return
         if parsed.path == "/api/finance/categories":
             self._send_json(db_get_finance_categories(uid) if uid else {"income":[],"expense":[]}); return
+        if parsed.path == "/api/db/download":
+            self._handle_db_download(); return
         html = _make_html(uid).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1958,6 +1989,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 self._api_finance_update(body)
             elif path == "/api/import":
                 self._api_import(uid, body); return
+            elif path == "/api/db/upload":
+                self._handle_db_upload(body); return
             else:
                 self._send_json({"error": "unknown path"}, 404)
         except Exception as exc:
@@ -2204,6 +2237,42 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 
         self._send_json({"ok": True, "imported": imported, "failed": failed})
 
+    def _handle_db_download(self):
+        try:
+            with open(DB_PATH, "rb") as f:
+                data = f.read()
+            fname = os.path.basename(DB_PATH)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_db_upload(self, body):
+        import base64, shutil
+        data64 = str(body.get("data", ""))
+        try:
+            raw = base64.b64decode(data64)
+        except Exception as e:
+            self._send_json({"error": f"base64: {e}"}); return
+        if not raw.startswith(b"SQLite format 3"):
+            self._send_json({"error": "File không phải SQLite database hợp lệ"}); return
+        bak = DB_PATH + ".bak"
+        try:
+            if os.path.exists(DB_PATH):
+                shutil.copy2(DB_PATH, bak)
+            with open(DB_PATH, "wb") as f:
+                f.write(raw)
+            run_migrations()
+            self._send_json({"ok": True, "size": len(raw)})
+        except Exception as exc:
+            if os.path.exists(bak):
+                shutil.copy2(bak, DB_PATH)
+            self._send_json({"error": str(exc)}, 500)
+
 
 # ── SECTION 3: _make_html (full replacement) ───────────
 
@@ -2362,6 +2431,21 @@ def _dash_post_sync(uid, path: str, body: dict) -> dict:
                 except: failed+=1
         except Exception as e: return {"error":str(e),"imported":imported,"failed":failed}
         return {"ok":True,"imported":imported,"failed":failed}
+    if path == "/api/db/upload":
+        import base64, shutil
+        try: raw = base64.b64decode(str(body.get("data","")))
+        except Exception as e: return {"error": f"base64: {e}"}
+        if not raw.startswith(b"SQLite format 3"):
+            return {"error": "File không phải SQLite database hợp lệ"}
+        bak = DB_PATH + ".bak"
+        try:
+            if os.path.exists(DB_PATH): shutil.copy2(DB_PATH, bak)
+            with open(DB_PATH, "wb") as f: f.write(raw)
+            run_migrations()
+            return {"ok": True, "size": len(raw)}
+        except Exception as exc:
+            if os.path.exists(bak): shutil.copy2(bak, DB_PATH)
+            return {"error": str(exc)}
     return {"error":"unknown path"}
 
 async def _aio_get(request):
@@ -2387,6 +2471,14 @@ async def _aio_get(request):
             cats = await asyncio.to_thread(db_get_finance_categories, uid) if uid else {"income":[],"expense":[]}
             return web.Response(text=json.dumps(cats, ensure_ascii=False),
                                 content_type="application/json", charset="utf-8")
+        if path == "/api/db/download":
+            try:
+                data = await asyncio.to_thread(lambda: open(DB_PATH,"rb").read())
+                fname = os.path.basename(DB_PATH)
+                return web.Response(body=data, content_type="application/octet-stream",
+                                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+            except Exception as exc:
+                return web.Response(text=json.dumps({"error":str(exc)}), content_type="application/json", status=500)
         html = await asyncio.to_thread(_make_html, uid)
         return web.Response(text=html, content_type="text/html", charset="utf-8")
     except Exception as exc:
@@ -2445,12 +2537,13 @@ async def run_with_webhook(ptb_app) -> None:
 
     wh_path = f"/wh/{BOT_TOKEN}"
     aio_app = web.Application()
-    aio_app.router.add_post(wh_path,           _aio_telegram)
-    aio_app.router.add_get("/api/export",       _aio_get)
-    aio_app.router.add_get("/api/finance/list", _aio_get)
+    aio_app.router.add_post(wh_path,                  _aio_telegram)
+    aio_app.router.add_get("/api/export",             _aio_get)
+    aio_app.router.add_get("/api/finance/list",       _aio_get)
     aio_app.router.add_get("/api/finance/categories", _aio_get)
-    aio_app.router.add_post("/api/{tail:.*}",   _aio_post)
-    aio_app.router.add_get("/{tail:.*}",        _aio_get)
+    aio_app.router.add_get("/api/db/download",        _aio_get)
+    aio_app.router.add_post("/api/{tail:.*}",         _aio_post)
+    aio_app.router.add_get("/{tail:.*}",              _aio_get)
 
     runner = web.AppRunner(aio_app, access_log=None)
     await runner.setup()
