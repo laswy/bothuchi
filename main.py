@@ -2863,36 +2863,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     token_part = f"&token={DASHBOARD_SECRET}" if DASHBOARD_SECRET else ""
-    local_link = f"http://localhost:{HTML_PORT}?user_id={uid}{token_part}"
+    if WEBHOOK_URL:
+        link = f"{WEBHOOK_URL}?user_id={uid}{token_part}"
+        source = "☁️ Server (Railway/Cloud)"
+    else:
+        link = f"http://localhost:{HTML_PORT}?user_id={uid}{token_part}"
+        source = "🖥️ Local (máy tính)"
     secret_note = (f"\n🔑 Token: `{DASHBOARD_SECRET}`" if DASHBOARD_SECRET else
-                   "\n⚠️ Chưa đặt DASHBOARD\\_SECRET — nên thêm vào .env trước khi dùng Cloudflare")
+                   "\n⚠️ Chưa đặt DASHBOARD\\_SECRET — nên thêm vào .env")
     await update.message.reply_text(
         f"🌐 *HTML Dashboard*\n\n"
         f"🪪 Telegram ID: `{uid}`\n"
-        f"🔗 Local: `{local_link}`{secret_note}\n\n"
-        "Nếu dùng Cloudflare Tunnel, thay `localhost` bằng URL tunnel của bạn.",
+        f"📡 Chế độ: {source}\n"
+        f"🔗 Link: `{link}`{secret_note}\n\n"
+        "Tính năng:\n"
+        "• 📊 Xem portfolio crypto & thu chi\n"
+        "• 🔍 Lọc theo ngày, danh mục, từ khoá\n"
+        "• ✏️ Thêm / sửa / xóa giao dịch\n"
+        "• 📥 Import / 📤 Export CSV & Excel\n"
+        "• 💾 Backup & restore database",
         parse_mode="Markdown")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
     text = (
         "📖 *HƯỚNG DẪN NHANH*\n\n"
-        "*📈 CRYPTO* (bấm 📈 Crypto)\n"
-        "• 📊 Danh Mục → xem portfolio\n"
-        "• ➕ Mua / ➖ Bán → hướng dẫn lệnh\n"
-        "• 📈 Biểu Đồ → biểu đồ portfolio\n"
-        "• 📋 Báo Cáo → tóm tắt portfolio\n"
-        "• `mua BTC 0.01 giá 70k` → ghi ngay\n"
+        "*📈 CRYPTO*\n"
+        "• 📊 Danh Mục — portfolio + lợi nhuận\n"
+        "• ➕ Mua / ➖ Bán — nhập lệnh thủ công\n"
+        "• 📈 Biểu Đồ — giá lịch sử & cơ cấu\n"
+        "• 📋 Báo Cáo — tóm tắt theo kỳ\n"
+        "• 🔗 Map Token — gắn CoinGecko ID\n"
+        "• ⬇️ Nhập / ⬆️ Xuất — CSV & Excel\n"
+        "• Lệnh nhanh: `mua BTC 0.01 giá 70k`\n"
         "• `/cp_add SYMBOL SL GIA [note]`\n"
         "• `/cp_sell SYMBOL SL GIA [note]`\n\n"
-        "*💰 THU CHI* (bấm 💰 Thu Chi)\n"
-        "• 💵 Thêm → thêm thu/chi\n"
-        "• 🗑️ Xóa → xóa giao dịch\n"
-        "• 📋 Báo Cáo → báo cáo kỳ\n"
-        "• 📈 Biểu Đồ → biểu đồ thu chi\n"
-        "• 🎯 Ngân Sách → đặt/xem ngân sách\n"
-        "• Nhập nhanh: `20k ăn sáng` hoặc `+500k lương`\n\n"
+        "*💰 THU CHI*\n"
+        "• 💵 Thêm — thu nhập hoặc chi tiêu\n"
+        "• 🗑️ Xóa — xóa giao dịch\n"
+        "• 🎯 Ngân Sách — đặt hạn mức & cảnh báo\n"
+        "• 🔁 Định Kỳ — thu/chi tự động hàng tháng\n"
+        "• 📋 Báo Cáo / 📈 Biểu Đồ\n"
+        "• ⬇️ Nhập File / ⬆️ Xuất File\n"
+        "• Lệnh nhanh: `20k ăn sáng`, `+500k lương`\n\n"
         "*🌐 HTML Dashboard*\n"
-        f"• Truy cập: `http://IP:{HTML_PORT}?user_id=YOUR_ID`"
+        "• Lọc thu chi theo ngày, danh mục, từ khoá\n"
+        "• Thêm / sửa / xóa không cần reload\n"
+        "• Import / Export CSV & Excel\n"
+        "• 💾 Backup & restore database\n"
+        f"• Dùng /dashboard để lấy link\n\n"
+        f"🪪 ID của bạn: `{uid}`"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=_submenu_keyboard(context.user_data))
 
