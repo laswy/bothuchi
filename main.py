@@ -3100,7 +3100,7 @@ async def nav_inline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data['lang'] = db_get_lang(uid)
 
     if scope == 'nav_crypto':
-        if action == 'portfolio':
+        if action in ('portfolio', 'chart', 'report'):
             try:
                 await send_portfolio_images(q.message.chat_id, uid, context)
             except Exception as e:
@@ -3142,7 +3142,12 @@ async def nav_inline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception: pass
     else:  # nav_finance
         if action == 'budget':
-            await handle_budget_btn(update, context)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton(t('budget_set_btn', uid), callback_data="budget_menu_set")],
+                [InlineKeyboardButton(t('budget_view_btn', uid), callback_data="budget_menu_view")],
+                [InlineKeyboardButton(t('cancel', uid),          callback_data="cancel_action")],
+            ])
+            await q.edit_message_text(t('budget_title', uid), parse_mode="Markdown", reply_markup=kb)
 
 async def handle_budget_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -3971,14 +3976,14 @@ def build_app() -> "Application":
     )
     report_conv=ConversationHandler(
         entry_points=[CommandHandler("baocao",report_start),
-                      CallbackQueryHandler(report_start, pattern="^nav_finance:report$|^nav_crypto:report$")],
+                      CallbackQueryHandler(report_start, pattern="^nav_finance:report$")],
         states={CHOOSING_REPORT_PERIOD:[CallbackQueryHandler(generate_report_for_period,pattern="^report_period_|^cancel_action$")]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
     )
     chart_conv=ConversationHandler(
         entry_points=[CommandHandler("bieudo",chart_start),
-                      CallbackQueryHandler(chart_start, pattern="^nav_finance:chart$|^nav_crypto:chart$")],
+                      CallbackQueryHandler(chart_start, pattern="^nav_finance:chart$")],
         states={CHOOSING_CHART_PERIOD:[CallbackQueryHandler(generate_charts_for_period,pattern="^chart_period_|^cancel_action$")]},
         fallbacks=[CommandHandler("cancel",cancel_conversation),
                    CallbackQueryHandler(cancel_conversation_callback,pattern="^cancel_action$")],
@@ -4061,7 +4066,7 @@ def build_app() -> "Application":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_settings')), handle_settings_btn))
     app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings:"))
     app.add_handler(CallbackQueryHandler(nav_inline_callback,
-        pattern="^nav_crypto:(portfolio|buy|sell|map|import|export)$|^nav_finance:budget$"))
+        pattern="^nav_crypto:(portfolio|buy|sell|map|import|export|chart|report)$|^nav_finance:budget$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_budget')), handle_budget_btn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_mk_pattern('btn_recurring')), handle_recurring_btn))
 
