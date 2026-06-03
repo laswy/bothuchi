@@ -1100,46 +1100,46 @@ def gen_portfolio_table_image(positions, prices, theme: str = DEFAULT_THEME) -> 
     plt.close(fig)
     return path
 # ===================== FINANCE CHARTS =====================
-def get_period_dates(period_choice: str):
+def get_period_dates(period_choice: str, uid: int = 0):
     today = datetime.datetime.now()
     if period_choice.startswith("m_"):          # m_YYYYMM
         y, m = int(period_choice[2:6]), int(period_choice[6:8])
         start = datetime.datetime(y, m, 1)
         end = ((start.replace(day=28)+datetime.timedelta(days=4))-datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
-        suffix = f"tháng {m:02d}/{y}"
+        suffix = t('period_m_suffix', uid).format(m=f"{m:02d}", y=y)
     elif period_choice.startswith("y_"):        # y_YYYY
         y = int(period_choice[2:])
         start = datetime.datetime(y, 1, 1)
         end = datetime.datetime(y, 12, 31, 23, 59, 59)
-        suffix = f"năm {y}"
+        suffix = t('period_y_suffix', uid).format(y=y)
     elif period_choice == "week":
         start = (today - datetime.timedelta(days=today.weekday())).replace(hour=0,minute=0,second=0,microsecond=0)
         end = start + datetime.timedelta(days=6,hours=23,minutes=59,seconds=59)
-        suffix = f"tuần này ({start.strftime('%d/%m')} - {end.strftime('%d/%m')})"
+        suffix = t('period_week_suffix', uid).format(start=start.strftime('%d/%m'), end=end.strftime('%d/%m'))
     elif period_choice == "month":
         start = today.replace(day=1,hour=0,minute=0,second=0,microsecond=0)
         end = ((start.replace(day=28)+datetime.timedelta(days=4)) - datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
-        suffix = f"tháng này ({today.strftime('%m/%Y')})"
+        suffix = t('period_month_suffix', uid).format(date=today.strftime('%m/%Y'))
     elif period_choice == "year":
         start = today.replace(month=1,day=1,hour=0,minute=0,second=0,microsecond=0)
         end = today.replace(month=12,day=31,hour=23,minute=59,second=59)
-        suffix = f"năm nay ({today.year})"
+        suffix = t('period_year_suffix', uid).format(year=today.year)
     elif period_choice == "all":
-        start = end = None; suffix = "tất cả thời gian"
+        start = end = None; suffix = t('period_all_suffix', uid)
     else:
         return None, None, None
     return start, end, suffix
 
-def _initial_period_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def _initial_period_keyboard(prefix: str, uid: int = 0) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📅 Tuần này",    callback_data=f"{prefix}_week")],
-        [InlineKeyboardButton("📆 Chọn tháng", callback_data=f"{prefix}_pick_month")],
-        [InlineKeyboardButton("🗓️ Chọn năm",  callback_data=f"{prefix}_pick_year")],
-        [InlineKeyboardButton("⏰ Toàn bộ",    callback_data=f"{prefix}_all")],
-        [InlineKeyboardButton("❌ Hủy bỏ",     callback_data="cancel_action")],
+        [InlineKeyboardButton(t('period_btn_week',   uid), callback_data=f"{prefix}_week")],
+        [InlineKeyboardButton(t('period_btn_month',  uid), callback_data=f"{prefix}_pick_month")],
+        [InlineKeyboardButton(t('period_btn_year',   uid), callback_data=f"{prefix}_pick_year")],
+        [InlineKeyboardButton(t('period_btn_all',    uid), callback_data=f"{prefix}_all")],
+        [InlineKeyboardButton(t('period_btn_cancel', uid), callback_data="cancel_action")],
     ])
 
-def _month_picker_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def _month_picker_keyboard(prefix: str, uid: int = 0) -> InlineKeyboardMarkup:
     """Last 13 months (current + 12 previous), 3 per row."""
     now = datetime.datetime.now()
     buttons, row = [], []
@@ -1150,27 +1150,33 @@ def _month_picker_keyboard(prefix: str) -> InlineKeyboardMarkup:
         row.append(InlineKeyboardButton(label, callback_data=f"{prefix}_m_{y}{m:02d}"))
         if len(row) == 3: buttons.append(row); row = []
     if row: buttons.append(row)
-    buttons.append([InlineKeyboardButton("↩️ Quay lại", callback_data=f"{prefix}_back"),
-                    InlineKeyboardButton("❌ Hủy",       callback_data="cancel_action")])
+    buttons.append([InlineKeyboardButton(t('period_btn_back',   uid), callback_data=f"{prefix}_back"),
+                    InlineKeyboardButton(t('period_btn_cancel', uid), callback_data="cancel_action")])
     return InlineKeyboardMarkup(buttons)
 
-def _year_picker_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def _year_picker_keyboard(prefix: str, uid: int = 0) -> InlineKeyboardMarkup:
     """Last 5 years, all in one row."""
     now = datetime.datetime.now()
     row = [InlineKeyboardButton(str(now.year - i), callback_data=f"{prefix}_y_{now.year - i}") for i in range(5)]
     return InlineKeyboardMarkup([
         row,
-        [InlineKeyboardButton("↩️ Quay lại", callback_data=f"{prefix}_back"),
-         InlineKeyboardButton("❌ Hủy",       callback_data="cancel_action")],
+        [InlineKeyboardButton(t('period_btn_back',   uid), callback_data=f"{prefix}_back"),
+         InlineKeyboardButton(t('period_btn_cancel', uid), callback_data="cancel_action")],
     ])
 
 
 def gen_finance_charts(user_id: int, period_choice: str) -> list:
     """Return list of (BytesIO, caption) tuples for all generated charts."""
-    start_date, end_date, title_suffix = get_period_dates(period_choice)
+    start_date, end_date, title_suffix = get_period_dates(period_choice, user_id)
     charts = []
+    lbl_inc = t('chart_income_label', user_id)
+    lbl_exp = t('chart_expense_label', user_id)
+    lbl_tin = t('chart_total_income', user_id)
+    lbl_tex = t('chart_total_expense', user_id)
+    lbl_bal = t('chart_balance', user_id)
+    currency_lbl = db_get_currency(user_id) or 'VND'
 
-    # 1. Donut chi tiêu
+    # 1. Donut expense distribution
     expenses_data = db_list_expenses_grouped(user_id, start_date, end_date)
     if expenses_data:
         labels = [r[0] for r in expenses_data]; sizes = [r[1] for r in expenses_data]
@@ -1185,13 +1191,13 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
             total = sum(sizes)
             legend_labels = [f'{lb} ({sz/total*100:.1f}%)' for lb,sz in zip(labels,sizes)]
             ax.legend(wedges, legend_labels, loc="center left", bbox_to_anchor=(1,0.5), fontsize=10)
-            plt.title(f"Phân bổ Chi tiêu ({title_suffix})", fontsize=14, fontweight='bold', pad=15)
+            plt.title(f"{t('chart_expense_dist',user_id)} ({title_suffix})", fontsize=14, fontweight='bold', pad=15)
             buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight', dpi=150, facecolor='white')
             buf.seek(0); plt.close(fig)
-            cap = f"🍩 Chi tiêu {title_suffix}\n💸 Tổng: {total:,.0f} VND"
+            cap = f"🍩 {lbl_exp} {title_suffix}\n💸 {lbl_tin}: {fmt_amount(total, user_id)}"
             charts.append((buf, cap))
 
-    # 2. Cột thu vs chi
+    # 2. Income vs expense bar chart
     expenses_m, incomes_m = db_get_monthly_report(user_id, start_date, end_date)
     if expenses_m or incomes_m:
         all_months = sorted(set([e[0] for e in expenses_m]+[i[0] for i in incomes_m]))
@@ -1200,10 +1206,11 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
         inc_vals = [inc_dict.get(m,0) for m in all_months]
         x = np.arange(len(all_months))
         fig, ax = plt.subplots(figsize=(max(8,len(all_months)*1.2+2), 6))
-        bars_inc = ax.bar(x-0.2, inc_vals, 0.4, label='Thu nhập', color='#2E8B57', alpha=0.8, edgecolor='white')
-        bars_exp = ax.bar(x+0.2, exp_vals, 0.4, label='Chi tiêu', color='#DC143C', alpha=0.8, edgecolor='white')
+        bars_inc = ax.bar(x-0.2, inc_vals, 0.4, label=lbl_inc, color='#2E8B57', alpha=0.8, edgecolor='white')
+        bars_exp = ax.bar(x+0.2, exp_vals, 0.4, label=lbl_exp, color='#DC143C', alpha=0.8, edgecolor='white')
         ax.set_xticks(x); ax.set_xticklabels(all_months, rotation=45, ha='right', fontsize=10)
-        ax.set_ylabel("Số tiền (VND)"); ax.set_title(f"Thu Chi ({title_suffix})", fontsize=13, fontweight='bold')
+        ax.set_ylabel(currency_lbl)
+        ax.set_title(f"{t('chart_incexp_title',user_id)} ({title_suffix})", fontsize=13, fontweight='bold')
         ax.grid(True, alpha=0.3); ax.legend(loc='upper left')
         for bar in bars_inc:
             h = bar.get_height()
@@ -1213,13 +1220,13 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
             if h > 0: ax.text(bar.get_x()+bar.get_width()/2, h*1.01, f'{int(h):,}', ha='center', va='bottom', fontsize=8, color='#DC143C', fontweight='bold')
         ti = sum(inc_vals); te = sum(exp_vals); nb = ti-te
         bbox_c = '#E8F5E8' if nb>=0 else '#FFE8E8'; tc = '#2E8B57' if nb>=0 else '#DC143C'
-        ax.text(0.98,0.98,f"Tổng thu: {ti:,}\nTổng chi: {te:,}\nCân đối: {nb:,}",
+        ax.text(0.98,0.98,f"{lbl_tin}: {ti:,}\n{lbl_tex}: {te:,}\n{lbl_bal}: {nb:,}",
             transform=ax.transAxes, va='top', ha='right', fontsize=9,
             bbox=dict(boxstyle='round,pad=0.4',facecolor=bbox_c,alpha=0.8),color=tc,fontweight='bold')
         plt.tight_layout()
         buf = io.BytesIO(); plt.savefig(buf,format='png',bbox_inches='tight',dpi=150,facecolor='white')
         buf.seek(0); plt.close(fig)
-        cap = f"📊 Thu chi {title_suffix}\n💰 Thu: {ti:,.0f}  💸 Chi: {te:,.0f}  {'✅' if nb>=0 else '⚠️'} Cân đối: {nb:,.0f}"
+        cap = f"📊 {t('chart_incexp_title',user_id)} {title_suffix}\n💰 {lbl_inc}: {fmt_amount(ti,user_id)}  💸 {lbl_exp}: {fmt_amount(te,user_id)}  {'✅' if nb>=0 else '⚠️'} {lbl_bal}: {fmt_amount(nb,user_id)}"
         charts.append((buf, cap))
 
     # 3. Heatmap (week / specific month / specific year / month / year)
@@ -1232,15 +1239,15 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
         if period_choice == "week":
             sd = start_date.date(); ed = end_date.date()
             grp = "strftime('%Y-%m-%d',created_at)"; x_label = "day"
-            htitle = f"Heatmap Chi Tiêu Theo Ngày ({title_suffix})"
+            htitle = f"{t('chart_heatmap_day',user_id)} ({title_suffix})"
         elif is_day_view:                             # month or m_YYYYMM
             sd = start_date.date(); ed = end_date.date()
             grp = "strftime('%Y-%m-%d',created_at)"; x_label = "day"
-            htitle = f"Heatmap Chi Tiêu Theo Ngày ({title_suffix})"
+            htitle = f"{t('chart_heatmap_day',user_id)} ({title_suffix})"
         else:                                         # year or y_YYYY
             sd = start_date.date(); ed = end_date.date()
             grp = "strftime('%Y-%m',created_at)"; x_label = "month"
-            htitle = f"Heatmap Chi Tiêu Theo Tháng ({title_suffix})"
+            htitle = f"{t('chart_heatmap_month',user_id)} ({title_suffix})"
         end_incl = ed + datetime.timedelta(days=1)
         cur.execute(f"SELECT {grp},category,SUM(amount) FROM expenses WHERE user_id=? AND created_at>=? AND created_at<? GROUP BY 1,2 ORDER BY 1",
                     (user_id, sd.isoformat(), end_incl.isoformat()))
@@ -1263,7 +1270,7 @@ def gen_finance_charts(user_id: int, period_choice: str) -> list:
             norm = mcolors.Normalize(vmin=0,vmax=heat.max() if heat.size else 1)
             fig,ax = plt.subplots(figsize=(max(8,len(cats)*1.2+2),max(4,len(x_vals)*0.4+2)))
             im = ax.imshow(heat,aspect='auto',cmap=cmap,norm=norm)
-            plt.colorbar(im,ax=ax,label='Số tiền (VND)')
+            plt.colorbar(im,ax=ax,label=currency_lbl)
             ax.set_xticks(np.arange(len(cats))); ax.set_xticklabels(cats,rotation=45,ha='right',fontsize=9)
             ax.set_yticks(np.arange(len(x_vals))); ax.set_yticklabels(x_vals,fontsize=8)
             ax.set_title(htitle,fontsize=13,fontweight='bold',pad=10)
@@ -3470,7 +3477,7 @@ async def get_expense_category(update: Update, context: ContextTypes.DEFAULT_TYP
             await q.message.reply_text(t('fin_budget_near',user_id).format(cat=category,spent=fmt_amount(spent,user_id),budget=fmt_amount(budget_amt,user_id)),parse_mode='Markdown')
     await post_to_channel(context,
         f"🔔 *Chi tiêu mới*\n💸 `{amount:,.0f} đ`\n📌 {category}\n📝 {note}\n📅 {created_at.strftime('%d/%m/%Y')}\n👤 `{anonymize_name(user_name)}`")
-    return await end_conv(update,context,"✅ Chi tiêu đã lưu.")
+    return await end_conv(update,context,t('fin_saved',user_id))
 
 # ===================== DELETE FLOW =====================
 async def handle_delete_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -3586,7 +3593,7 @@ async def reset_data_confirmation_2_handler(update: Update, context: ContextType
 # ===================== REPORT & CHART FLOWS =====================
 async def report_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    uid=update.effective_user.id; kb=_initial_period_keyboard("report_period")
+    uid=update.effective_user.id; kb=_initial_period_keyboard("report_period", uid)
     msg=t('report_choose_period',uid)
     if update.callback_query:
         await update.callback_query.answer()
@@ -3601,15 +3608,15 @@ async def generate_report_for_period(update: Update, context: ContextTypes.DEFAU
         return await cancel_conversation_callback(update,context)
     period=q.data.replace("report_period_","")
     if period=="back":
-        await q.edit_message_text(t('report_choose_period',uid),reply_markup=_initial_period_keyboard("report_period"),parse_mode='Markdown')
+        await q.edit_message_text(t('report_choose_period',uid),reply_markup=_initial_period_keyboard("report_period", uid),parse_mode='Markdown')
         return CHOOSING_REPORT_PERIOD
     if period=="pick_month":
-        await q.edit_message_text(t('pick_month',uid),reply_markup=_month_picker_keyboard("report_period"))
+        await q.edit_message_text(t('pick_month',uid),reply_markup=_month_picker_keyboard("report_period", uid))
         return CHOOSING_REPORT_PERIOD
     if period=="pick_year":
-        await q.edit_message_text(t('pick_year',uid),reply_markup=_year_picker_keyboard("report_period"))
+        await q.edit_message_text(t('pick_year',uid),reply_markup=_year_picker_keyboard("report_period", uid))
         return CHOOSING_REPORT_PERIOD
-    start_date,end_date,title_suffix=get_period_dates(period)
+    start_date,end_date,title_suffix=get_period_dates(period, uid)
     if title_suffix is None:
         return CHOOSING_REPORT_PERIOD
     loading=await q.edit_message_text(t('report_loading',uid))
@@ -3656,7 +3663,7 @@ async def generate_report_for_period(update: Update, context: ContextTypes.DEFAU
 
 async def chart_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _clear_keep_submenu(context.user_data)
-    uid=update.effective_user.id; kb=_initial_period_keyboard("chart_period")
+    uid=update.effective_user.id; kb=_initial_period_keyboard("chart_period", uid)
     msg=t('chart_choose_period',uid)
     if update.callback_query:
         await update.callback_query.answer()
@@ -3671,15 +3678,15 @@ async def generate_charts_for_period(update: Update, context: ContextTypes.DEFAU
         return await cancel_conversation_callback(update, context)
     uid=q.from_user.id; period=q.data.replace("chart_period_","")
     if period=="back":
-        await q.edit_message_text(t('chart_choose_period',uid),reply_markup=_initial_period_keyboard("chart_period"))
+        await q.edit_message_text(t('chart_choose_period',uid),reply_markup=_initial_period_keyboard("chart_period", uid))
         return CHOOSING_CHART_PERIOD
     if period=="pick_month":
-        await q.edit_message_text(t('pick_month',uid),reply_markup=_month_picker_keyboard("chart_period"))
+        await q.edit_message_text(t('pick_month',uid),reply_markup=_month_picker_keyboard("chart_period", uid))
         return CHOOSING_CHART_PERIOD
     if period=="pick_year":
-        await q.edit_message_text(t('pick_year',uid),reply_markup=_year_picker_keyboard("chart_period"))
+        await q.edit_message_text(t('pick_year',uid),reply_markup=_year_picker_keyboard("chart_period", uid))
         return CHOOSING_CHART_PERIOD
-    _,_,title_suffix=get_period_dates(period)
+    _,_,title_suffix=get_period_dates(period, uid)
     if title_suffix is None:
         return CHOOSING_CHART_PERIOD
     msg=await q.edit_message_text(t('chart_loading',uid).format(period=title_suffix))
