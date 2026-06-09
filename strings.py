@@ -45,43 +45,69 @@ STRINGS: dict[str, dict[str, str]] = {
         'menu_home':        'Main menu:',
         # ── Start / Help / Dashboard ──────────────────────────────
         'start_msg':        (
-            '👋 Welcome! Crypto portfolio + Personal finance bot.\n\n'
-            '🪪 Your Telegram ID: `{uid}`\n'
-            '🌐 HTML Dashboard: `http://localhost:{port}?user_id={uid}`\n\n'
-            'Use the keyboard below or /help for guide.'
+            '👋 *Welcome to Bothuchi!*\n\n'
+            'All-in-one bot for 📈 *Crypto Portfolio* + 💰 *Personal Finance*.\n\n'
+            '*What I can do:*\n'
+            '• 📊 Track crypto holdings with real-time P&L\n'
+            '• 💵 Record income & expenses by category\n'
+            '• 📋 Generate reports: weekly, monthly, yearly\n'
+            '• 📈 Beautiful charts: donut, bar, heatmap\n'
+            '• 🎯 Budget limits with overspend alerts\n'
+            '• 🔁 Recurring auto-entries every month\n'
+            '• 📤 Import / Export CSV & Excel\n'
+            '• 🌐 Web dashboard for full management\n\n'
+            '🪪 Your Telegram ID: `{uid}`\n\n'
+            '👇 Use the menu below or /help to get started.'
         ),
-        'help_title':       '📖 *QUICK GUIDE*',
+        'help_title':       '📖 *GUIDE*',
         'help_crypto':      (
-            '*📈 CRYPTO*\n'
-            '• 📊 Portfolio — holdings + P&L\n'
-            '• ➕ Buy / ➖ Sell — manual entry\n'
-            '• 📈 Chart — price history & allocation\n'
-            '• 📋 Report — period summary\n'
-            '• 🔗 Map Token — set CoinGecko ID\n'
-            '• ⬇️ Import / ⬆️ Export — CSV & Excel\n'
-            '• Quick: `buy BTC 0.01 price 70k`\n'
-            '• `/cp_add SYMBOL QTY PRICE [note]`\n'
-            '• `/cp_sell SYMBOL QTY PRICE [note]`'
+            '*📈 CRYPTO PORTFOLIO*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '• 📊 *Portfolio* — real-time holdings, P&L, allocation chart\n'
+            '• ➕ *Buy* — add a buy trade\n'
+            '• ➖ *Sell* — record a sell\n'
+            '• 📋 *Report* — period summary (week/month/year)\n'
+            '• 🔗 *Map Token* — link symbol to CoinGecko ID\n'
+            '• ⬇️ *Import* / ⬆️ *Export* — CSV & Excel\n\n'
+            '*Quick commands:*\n'
+            '`buy BTC 0.01 price 70k`\n'
+            '`sell ETH 1 price 3500`\n'
+            '`/cp_add BTC 0.5 65000 DCA round 1`\n'
+            '`/cp_sell SOL 10 175`'
         ),
         'help_finance':     (
-            '*💰 FINANCE*\n'
-            '• 💵 Add — income or expense\n'
-            '• 🗑️ Delete — remove transaction\n'
-            '• 🎯 Budget — set limits & alerts\n'
-            '• 🔁 Recurring — auto monthly entries\n'
-            '• 📋 Report / 📈 Chart\n'
-            '• ⬇️ Import File / ⬆️ Export File\n'
-            '• Quick: `$20 breakfast`, `+$500 salary`'
+            '*💰 INCOME & EXPENSE*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '• 💵 *Add* — log income or expense with category\n'
+            '• 🗑️ *Delete* — remove a transaction\n'
+            '• 🎯 *Budget* — monthly limits per category + alerts\n'
+            '• 🔁 *Recurring* — auto-add fixed monthly entries\n'
+            '• 📋 *Report* — breakdown by source / category\n'
+            '• 📈 *Chart* — bar, donut, heatmap by period\n'
+            '• ⬇️ *Import* / ⬆️ *Export* — CSV & Excel\n\n'
+            '*Quick entry:*\n'
+            '`$20 breakfast` → expense $20\n'
+            '`+$500 salary` → income $500\n'
+            '`50k taxi` → expense 50,000'
         ),
         'help_dashboard':   (
-            '*🌐 HTML Dashboard*\n'
-            '• Filter by date, category, keyword\n'
-            '• Add / edit / delete without reload\n'
-            '• Import / Export CSV & Excel\n'
-            '• 💾 Backup & restore database\n'
-            '• Use /dashboard to get link'
+            '*🌐 WEB DASHBOARD*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '• 🔍 Filter by date, category, keyword\n'
+            '• ✏️ Add / edit / delete transactions live\n'
+            '• 📥 Import / 📤 Export CSV & Excel\n'
+            '• 💾 Backup & restore full database\n'
+            '• Use /dashboard to get your private link'
         ),
         'help_id':          '🪪 Your ID: `{uid}`',
+        'demo_crypto_caption': (
+            '📊 *Sample: Crypto Portfolio*\n'
+            '_(Demo data — your real portfolio will look like this)_'
+        ),
+        'demo_finance_caption': (
+            '💰 *Sample: Income & Expense Report*\n'
+            '_(Demo data — your real charts will look like this)_'
+        ),
         'dashboard_title':  '🌐 *HTML Dashboard*',
         'dashboard_id':     '🪪 Telegram ID: `{uid}`',
         'dashboard_link':   '🔗 Link: `{link}`',
@@ -343,43 +369,69 @@ STRINGS: dict[str, dict[str, str]] = {
         'menu_home':        'Menu chính:',
         # ── Start / Help / Dashboard ──────────────────────────────
         'start_msg':        (
-            '👋 Chào mừng! Bot quản lý *Crypto* + *Thu Chi* tài chính.\n\n'
-            '🪪 Telegram ID của bạn: `{uid}`\n'
-            '🌐 HTML Dashboard: `http://localhost:{port}?user_id={uid}`\n\n'
-            'Dùng bàn phím bên dưới hoặc /help để xem hướng dẫn.'
+            '👋 *Chào mừng đến với Bothuchi!*\n\n'
+            'Bot quản lý toàn diện 📈 *Danh mục Crypto* + 💰 *Thu Chi* cá nhân.\n\n'
+            '*Tính năng chính:*\n'
+            '• 📊 Theo dõi crypto real-time — số dư, lãi/lỗ, biểu đồ phân bổ\n'
+            '• 💵 Ghi thu chi theo danh mục, tìm kiếm, lọc theo thời gian\n'
+            '• 📋 Báo cáo chi tiết: tuần, tháng, năm, toàn bộ\n'
+            '• 📈 Biểu đồ đẹp: donut, cột so sánh, heatmap\n'
+            '• 🎯 Ngân sách theo danh mục + cảnh báo vượt hạn mức\n'
+            '• 🔁 Giao dịch định kỳ tự động hàng tháng\n'
+            '• 📤 Nhập / Xuất CSV & Excel\n'
+            '• 🌐 Dashboard web quản lý toàn bộ\n\n'
+            '🪪 Telegram ID của bạn: `{uid}`\n\n'
+            '👇 Dùng menu bên dưới hoặc /help để bắt đầu.'
         ),
-        'help_title':       '📖 *HƯỚNG DẪN NHANH*',
+        'help_title':       '📖 *HƯỚNG DẪN SỬ DỤNG*',
         'help_crypto':      (
-            '*📈 CRYPTO*\n'
-            '• 📊 Danh Mục — portfolio + lợi nhuận\n'
-            '• ➕ Mua / ➖ Bán — nhập lệnh thủ công\n'
-            '• 📈 Biểu Đồ — giá lịch sử & cơ cấu\n'
-            '• 📋 Báo Cáo — tóm tắt theo kỳ\n'
-            '• 🔗 Map Token — gắn CoinGecko ID\n'
-            '• ⬇️ Nhập / ⬆️ Xuất — CSV & Excel\n'
-            '• Lệnh nhanh: `mua BTC 0.01 giá 70k`\n'
-            '• `/cp_add SYMBOL SL GIA [note]`\n'
-            '• `/cp_sell SYMBOL SL GIA [note]`'
+            '*📈 DANH MỤC CRYPTO*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '• 📊 *Danh Mục* — số dư real-time, lãi/lỗ, biểu đồ phân bổ\n'
+            '• ➕ *Mua* — nhập lệnh mua\n'
+            '• ➖ *Bán* — ghi nhận lệnh bán\n'
+            '• 📋 *Báo Cáo* — tóm tắt theo tuần/tháng/năm\n'
+            '• 🔗 *Map Token* — gắn symbol với CoinGecko ID\n'
+            '• ⬇️ *Nhập* / ⬆️ *Xuất* — CSV & Excel\n\n'
+            '*Lệnh nhanh:*\n'
+            '`mua BTC 0.01 giá 70k`\n'
+            '`bán ETH 1 giá 3500`\n'
+            '`/cp_add BTC 0.5 65000 DCA lần 1`\n'
+            '`/cp_sell SOL 10 175`'
         ),
         'help_finance':     (
-            '*💰 THU CHI*\n'
-            '• 💵 Thêm — thu nhập hoặc chi tiêu\n'
-            '• 🗑️ Xóa — xóa giao dịch\n'
-            '• 🎯 Ngân Sách — đặt hạn mức & cảnh báo\n'
-            '• 🔁 Định Kỳ — thu/chi tự động hàng tháng\n'
-            '• 📋 Báo Cáo / 📈 Biểu Đồ\n'
-            '• ⬇️ Nhập File / ⬆️ Xuất File\n'
-            '• Lệnh nhanh: `20k ăn sáng`, `+500k lương`'
+            '*💰 THU CHI CÁ NHÂN*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '• 💵 *Thêm* — ghi thu nhập hoặc chi tiêu theo danh mục\n'
+            '• 🗑️ *Xóa* — xóa giao dịch đã nhập\n'
+            '• 🎯 *Ngân Sách* — đặt hạn mức chi theo danh mục + cảnh báo\n'
+            '• 🔁 *Định Kỳ* — tự động thêm thu/chi hàng tháng\n'
+            '• 📋 *Báo Cáo* — phân tích chi tiết thu/chi theo nguồn, danh mục\n'
+            '• 📈 *Biểu Đồ* — cột, donut, heatmap theo kỳ\n'
+            '• ⬇️ *Nhập* / ⬆️ *Xuất* — CSV & Excel\n\n'
+            '*Nhập nhanh:*\n'
+            '`20k ăn sáng` → chi tiêu 20.000đ\n'
+            '`+500k lương` → thu nhập 500.000đ\n'
+            '`50k taxi` → chi tiêu 50.000đ'
         ),
         'help_dashboard':   (
-            '*🌐 HTML Dashboard*\n'
-            '• Lọc thu chi theo ngày, danh mục, từ khoá\n'
-            '• Thêm / sửa / xóa không cần reload\n'
-            '• Import / Export CSV & Excel\n'
-            '• 💾 Backup & restore database\n'
-            '• Dùng /dashboard để lấy link'
+            '*🌐 DASHBOARD WEB*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '• 🔍 Lọc thu chi theo ngày, danh mục, từ khoá\n'
+            '• ✏️ Thêm / sửa / xóa giao dịch không cần reload\n'
+            '• 📥 Nhập / 📤 Xuất CSV & Excel\n'
+            '• 💾 Backup & restore toàn bộ database\n'
+            '• Dùng /dashboard để lấy link riêng của bạn'
         ),
         'help_id':          '🪪 ID của bạn: `{uid}`',
+        'demo_crypto_caption': (
+            '📊 *Minh hoạ: Danh Mục Crypto*\n'
+            '_(Dữ liệu mẫu — danh mục thực của bạn sẽ trông như thế này)_'
+        ),
+        'demo_finance_caption': (
+            '💰 *Minh hoạ: Báo Cáo Thu Chi*\n'
+            '_(Dữ liệu mẫu — biểu đồ thực của bạn sẽ trông như thế này)_'
+        ),
         'dashboard_title':  '🌐 *HTML Dashboard*',
         'dashboard_id':     '🪪 Telegram ID: `{uid}`',
         'dashboard_link':   '🔗 Link: `{link}`',

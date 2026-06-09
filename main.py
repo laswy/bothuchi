@@ -2899,6 +2899,82 @@ async def cp_import_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ {e}"); return
     await update.message.reply_text(f"✅ Đã nhập {ok} giao dịch, lỗi {fail}.")
 
+# ===================== DEMO IMAGES =====================
+def _gen_demo_crypto_images(theme: str = DEFAULT_THEME) -> list:
+    """Return [donut_path, table_path] with sample portfolio data."""
+    demo_positions = [
+        {"symbol": "BTC",   "qty": 0.5,   "invested_usd": 25000, "cg_id": "bitcoin"},
+        {"symbol": "ETH",   "qty": 3.0,   "invested_usd": 9000,  "cg_id": "ethereum"},
+        {"symbol": "SOL",   "qty": 50.0,  "invested_usd": 4000,  "cg_id": "solana"},
+        {"symbol": "BNB",   "qty": 5.0,   "invested_usd": 2500,  "cg_id": "binancecoin"},
+        {"symbol": "AVAX",  "qty": 20.0,  "invested_usd": 700,   "cg_id": "avalanche-2"},
+        {"symbol": "MATIC", "qty": 500.0, "invested_usd": 450,   "cg_id": "matic-network"},
+    ]
+    demo_prices = {
+        "bitcoin": 67500.0, "ethereum": 3500.0, "solana": 175.0,
+        "binancecoin": 605.0, "avalanche-2": 40.0, "matic-network": 1.1,
+    }
+    return [
+        gen_portfolio_donut_image(demo_positions, demo_prices, theme),
+        gen_portfolio_table_image(demo_positions, demo_prices, theme),
+    ]
+
+
+def _gen_demo_finance_image() -> io.BytesIO:
+    """Return BytesIO PNG: income vs expense bar + expense donut (sample data)."""
+    months = ["03/2025", "04/2025", "05/2025", "06/2025"]
+    income_vals  = [15_000_000, 18_000_000, 16_500_000, 20_000_000]
+    expense_vals = [8_500_000,  11_200_000,  9_800_000, 13_400_000]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig.patch.set_facecolor('white')
+
+    # --- bar chart ---
+    x = np.arange(len(months))
+    b_inc = ax1.bar(x - 0.2, income_vals,  0.4, label='Thu nhập', color='#2E8B57', alpha=0.85, edgecolor='white')
+    b_exp = ax1.bar(x + 0.2, expense_vals, 0.4, label='Chi tiêu', color='#DC143C', alpha=0.85, edgecolor='white')
+    ax1.set_xticks(x); ax1.set_xticklabels(months, fontsize=10)
+    ax1.set_title("Thu Chi 4 Tháng Gần Nhất", fontsize=13, fontweight='bold', pad=12)
+    ax1.set_ylabel("VNĐ"); ax1.grid(True, alpha=0.3); ax1.legend()
+    for bar in b_inc:
+        h = bar.get_height()
+        ax1.text(bar.get_x()+bar.get_width()/2, h*1.01, f'{h/1e6:.1f}M',
+                 ha='center', va='bottom', fontsize=8, color='#2E8B57', fontweight='bold')
+    for bar in b_exp:
+        h = bar.get_height()
+        ax1.text(bar.get_x()+bar.get_width()/2, h*1.01, f'{h/1e6:.1f}M',
+                 ha='center', va='bottom', fontsize=8, color='#DC143C', fontweight='bold')
+    ti = sum(income_vals); te = sum(expense_vals); nb = ti - te
+    ax1.text(0.98, 0.98,
+             f"Thu: {ti/1e6:.1f}M\nChi: {te/1e6:.1f}M\nDư:  {nb/1e6:.1f}M",
+             transform=ax1.transAxes, va='top', ha='right', fontsize=9,
+             bbox=dict(boxstyle='round,pad=0.4', facecolor='#E8F5E8', alpha=0.9),
+             color='#2E8B57', fontweight='bold')
+
+    # --- donut expense by category ---
+    cats  = ['Ăn uống', 'Di chuyển', 'Mua sắm', 'Hóa đơn', 'Giải trí', 'Khác']
+    sizes = [35, 18, 22, 12, 8, 5]
+    clrs  = ['#FF7A7A', '#3498DB', '#F1C40F', '#27AE60', '#E74C3C', '#9B59B6']
+    wedges, _, autotexts = ax2.pie(
+        sizes, colors=clrs, startangle=90, counterclock=False,
+        wedgeprops={'width': 0.42, 'edgecolor': 'white', 'linewidth': 2},
+        autopct='%1.0f%%', pctdistance=0.82)
+    for at in autotexts:
+        at.set_fontsize(11); at.set_fontweight('bold')
+    ax2.add_artist(plt.Circle((0, 0), 0.56, fc='white'))
+    ax2.set_title("Phân Bổ Chi Tiêu Theo Danh Mục", fontsize=13, fontweight='bold', pad=12)
+    ax2.legend(wedges, cats, loc='center left', bbox_to_anchor=(1, 0.5), fontsize=9)
+
+    fig.text(0.5, 0.01, '* Ảnh minh hoạ — dữ liệu mẫu',
+             ha='center', fontsize=9, color='gray', style='italic')
+    plt.tight_layout(rect=[0, 0.04, 1, 1])
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150, facecolor='white')
+    buf.seek(0); plt.close(fig)
+    return buf
+
+
 # ===================== CRYPTO COMMAND HANDLERS =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_migrated()
@@ -2914,6 +2990,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(lang))
     await update.message.reply_text(t('lang_choose', uid), reply_markup=kb)
+
+    # Send demo preview images
+    try:
+        theme = db_get_theme(uid)
+        crypto_paths = await asyncio.to_thread(_gen_demo_crypto_images, theme)
+        finance_buf  = await asyncio.to_thread(_gen_demo_finance_image)
+        for i, path in enumerate(crypto_paths):
+            cap = t('demo_crypto_caption', uid) if i == 0 else None
+            with open(path, 'rb') as f:
+                await update.message.reply_photo(photo=f, caption=cap, parse_mode="Markdown")
+        await update.message.reply_photo(
+            photo=finance_buf,
+            caption=t('demo_finance_caption', uid),
+            parse_mode="Markdown")
+    except Exception as _demo_err:
+        logger.warning("Demo images failed: %s", _demo_err)
+    finally:
+        for _p in (crypto_paths if 'crypto_paths' in dir() else []):
+            try: os.remove(_p)
+            except Exception: pass
 
 async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
