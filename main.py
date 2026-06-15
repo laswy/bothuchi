@@ -9,6 +9,8 @@ Univer All-in-One Bot
 from __future__ import annotations
 
 import os, io, csv, sqlite3, datetime, tempfile, asyncio, traceback, re, threading, logging, json
+import functools
+import html as _html
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
 
@@ -44,9 +46,80 @@ from telegram.ext import (
     Application, CommandHandler, ContextTypes,
     CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 )
+from telegram.constants import ParseMode
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ===================== MARKDOWN → HTML LAYER =====================
+# Legacy MarkdownV1 (parse_mode="Markdown") is deprecated and breaks easily on
+# dynamic data containing `_ * [ ` ` characters (coin names, file names, notes…).
+# Instead of rewriting ~250 markup sites by hand (risky: `_` also appears in
+# thousands of Python identifiers), we convert MarkdownV1 → HTML at the single
+# choke point: the bot's send methods. HTML only needs `& < >` escaped, which is
+# far rarer in this bot's data, so this is strictly safer than the old behaviour.
+
+_MD_LINK_RE   = re.compile(r'\[([^\]]+)\]\(([^)\s]+)\)')
+_MD_CODE_RE   = re.compile(r'`([^`\n]+)`')
+_MD_BOLD_RE   = re.compile(r'\*([^*\n]+)\*')
+_MD_ITALIC_RE = re.compile(r'(?<![\w*])_([^_\n]+)_(?![\w*])')
+_MD_PH_RE     = re.compile('\x00(\\d+)\x00')
+
+def md_to_html(text: str) -> str:
+    """Convert legacy MarkdownV1 markup to Telegram-safe HTML.
+
+    Handles *bold*, _italic_, `code`, and [label](url). Everything else is
+    HTML-escaped so stray ``& < >`` in dynamic data can never break parsing.
+    """
+    if not text:
+        return text
+    stash: list[str] = []
+
+    def _stash(frag: str) -> str:
+        stash.append(frag)
+        return f'\x00{len(stash) - 1}\x00'
+
+    # Pull links and code spans out first so their contents are not re-parsed.
+    text = _MD_LINK_RE.sub(
+        lambda m: _stash(f'<a href="{_html.escape(m.group(2), quote=True)}">'
+                         f'{_html.escape(m.group(1))}</a>'),
+        text,
+    )
+    text = _MD_CODE_RE.sub(
+        lambda m: _stash(f'<code>{_html.escape(m.group(1))}</code>'),
+        text,
+    )
+    # Escape the remaining plain text, then apply inline styles.
+    text = _html.escape(text)
+    text = _MD_BOLD_RE.sub(r'<b>\1</b>', text)
+    text = _MD_ITALIC_RE.sub(r'<i>\1</i>', text)
+    # Restore the stashed (already-escaped) fragments.
+    text = _MD_PH_RE.sub(lambda m: stash[int(m.group(1))], text)
+    return text
+
+_MD_PARSE_MODES = {ParseMode.MARKDOWN, ParseMode.MARKDOWN_V2, "Markdown", "MarkdownV2"}
+
+def install_html_layer(application: "Application") -> None:
+    """Wrap the bot's send methods so any call using parse_mode="Markdown"
+    is transparently converted to HTML. Calls without a Markdown parse_mode
+    (plain text or already-HTML) are passed through untouched."""
+    bot = application.bot
+
+    def _wrap(orig, field):
+        @functools.wraps(orig)
+        async def wrapper(*args, **kwargs):
+            pm = kwargs.get("parse_mode")
+            payload = kwargs.get(field)
+            if pm in _MD_PARSE_MODES and isinstance(payload, str):
+                kwargs[field] = md_to_html(payload)
+                kwargs["parse_mode"] = ParseMode.HTML
+            return await orig(*args, **kwargs)
+        return wrapper
+
+    bot.send_message      = _wrap(bot.send_message, "text")
+    bot.edit_message_text = _wrap(bot.edit_message_text, "text")
+    bot.send_photo        = _wrap(bot.send_photo, "caption")
+    bot.send_document     = _wrap(bot.send_document, "caption")
 
 # ===================== CONFIG =====================
 BOT_TOKEN        = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -4038,6 +4111,7 @@ async def set_currency_callback(update: Update, context: ContextTypes.DEFAULT_TY
 def build_app() -> "Application":
     run_migrations()
     app = Application.builder().token(BOT_TOKEN).build()
+    install_html_layer(app)
 
     # Finance ConversationHandlers (register FIRST for priority)
     add_conv=ConversationHandler(
