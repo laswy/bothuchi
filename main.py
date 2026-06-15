@@ -9,7 +9,6 @@ Univer All-in-One Bot
 from __future__ import annotations
 
 import os, io, csv, sqlite3, datetime, tempfile, asyncio, traceback, re, threading, logging, json
-import functools
 import html as _html
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
@@ -44,7 +43,7 @@ from telegram import (
 )
 from telegram.ext import (
     Application, CommandHandler, ContextTypes,
-    CallbackQueryHandler, MessageHandler, filters, ConversationHandler
+    CallbackQueryHandler, MessageHandler, filters, ConversationHandler, ExtBot
 )
 from telegram.constants import ParseMode
 
@@ -99,27 +98,33 @@ def md_to_html(text: str) -> str:
 
 _MD_PARSE_MODES = {ParseMode.MARKDOWN, ParseMode.MARKDOWN_V2, "Markdown", "MarkdownV2"}
 
-def install_html_layer(application: "Application") -> None:
-    """Wrap the bot's send methods so any call using parse_mode="Markdown"
-    is transparently converted to HTML. Calls without a Markdown parse_mode
-    (plain text or already-HTML) are passed through untouched."""
-    bot = application.bot
+def _md_convert_kwargs(kwargs: dict, field: str) -> None:
+    """In-place: if a call uses parse_mode="Markdown", convert its text/caption
+    to HTML and switch parse_mode to HTML. Plain / already-HTML calls untouched."""
+    if kwargs.get("parse_mode") in _MD_PARSE_MODES and isinstance(kwargs.get(field), str):
+        kwargs[field] = md_to_html(kwargs[field])
+        kwargs["parse_mode"] = ParseMode.HTML
 
-    def _wrap(orig, field):
-        @functools.wraps(orig)
-        async def wrapper(*args, **kwargs):
-            pm = kwargs.get("parse_mode")
-            payload = kwargs.get(field)
-            if pm in _MD_PARSE_MODES and isinstance(payload, str):
-                kwargs[field] = md_to_html(payload)
-                kwargs["parse_mode"] = ParseMode.HTML
-            return await orig(*args, **kwargs)
-        return wrapper
+class HTMLFormattingBot(ExtBot):
+    """ExtBot subclass that transparently converts legacy MarkdownV1 markup to
+    HTML at send time. ExtBot instances are immutable, so we override the send
+    methods via subclassing rather than monkey-patching the instance."""
 
-    bot.send_message      = _wrap(bot.send_message, "text")
-    bot.edit_message_text = _wrap(bot.edit_message_text, "text")
-    bot.send_photo        = _wrap(bot.send_photo, "caption")
-    bot.send_document     = _wrap(bot.send_document, "caption")
+    async def send_message(self, *args, **kwargs):
+        _md_convert_kwargs(kwargs, "text")
+        return await super().send_message(*args, **kwargs)
+
+    async def edit_message_text(self, *args, **kwargs):
+        _md_convert_kwargs(kwargs, "text")
+        return await super().edit_message_text(*args, **kwargs)
+
+    async def send_photo(self, *args, **kwargs):
+        _md_convert_kwargs(kwargs, "caption")
+        return await super().send_photo(*args, **kwargs)
+
+    async def send_document(self, *args, **kwargs):
+        _md_convert_kwargs(kwargs, "caption")
+        return await super().send_document(*args, **kwargs)
 
 # ===================== CONFIG =====================
 BOT_TOKEN        = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -4110,8 +4115,7 @@ async def set_currency_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # ===================== BUILD APP =====================
 def build_app() -> "Application":
     run_migrations()
-    app = Application.builder().token(BOT_TOKEN).build()
-    install_html_layer(app)
+    app = Application.builder().bot(HTMLFormattingBot(BOT_TOKEN)).build()
 
     # Finance ConversationHandlers (register FIRST for priority)
     add_conv=ConversationHandler(
