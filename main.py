@@ -8,7 +8,7 @@ Univer All-in-One Bot
 """
 from __future__ import annotations
 
-import os, io, csv, sqlite3, datetime, tempfile, asyncio, traceback, re, threading, logging, json
+import os, io, csv, sqlite3, datetime, tempfile, asyncio, traceback, re, threading, logging, json, hmac
 import html as _html
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
@@ -489,13 +489,23 @@ def db_add_expense(user_id: int, amount: float, note: str, category: str,
                 (user_id, amount, note, category, created_at.isoformat()))
     conn.commit(); conn.close()
 
+def _day_bounds(start_date, end_date) -> list:
+    """[start, end) bounds for `created_at` filters covering whole calendar days
+    start_date..end_date inclusive. Date-only strings ('YYYY-MM-DD') are used so
+    rows stored as 'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS' or ISO 'YYYY-MM-DDTHH:MM:SS'
+    all compare correctly, and an end_date of 23:59:59 does not leak into the
+    following day (the old `end_date + 1 day` did)."""
+    def _d(x):
+        return x.date() if isinstance(x, datetime.datetime) else x
+    return [_d(start_date).isoformat(), (_d(end_date) + datetime.timedelta(days=1)).isoformat()]
+
 def db_list_expenses_grouped(user_id: int, start_date=None, end_date=None):
     conn = db_conn(); cur = conn.cursor()
     q = "SELECT category,SUM(amount) FROM expenses WHERE user_id=?"
     params = [user_id]
     if start_date and end_date:
         q += " AND created_at>=? AND created_at<?"
-        params += [start_date.isoformat(), (end_date+datetime.timedelta(days=1)).isoformat()]
+        params += _day_bounds(start_date, end_date)
     q += " GROUP BY category ORDER BY SUM(amount) DESC"
     cur.execute(q, tuple(params)); rows = cur.fetchall(); conn.close()
     return rows
@@ -506,7 +516,7 @@ def db_list_incomes_grouped(user_id: int, start_date=None, end_date=None):
     params = [user_id]
     if start_date and end_date:
         q += " AND created_at>=? AND created_at<?"
-        params += [start_date.isoformat(), (end_date+datetime.timedelta(days=1)).isoformat()]
+        params += _day_bounds(start_date, end_date)
     q += " GROUP BY source ORDER BY SUM(amount) DESC"
     cur.execute(q, tuple(params)); rows = cur.fetchall(); conn.close()
     return rows
@@ -519,7 +529,7 @@ def db_get_combined_summary(user_id: int, start_date=None, end_date=None):
     if start_date and end_date:
         extra = " AND created_at>=? AND created_at<?"
         inc_q += extra; exp_q += extra
-        params += [start_date.isoformat(), (end_date+datetime.timedelta(days=1)).isoformat()]
+        params += _day_bounds(start_date, end_date)
     cur.execute(inc_q, tuple(params)); income = cur.fetchone()[0] or 0
     cur.execute(exp_q, tuple(params)); expense = cur.fetchone()[0] or 0
     conn.close()
@@ -533,7 +543,7 @@ def db_get_monthly_report(user_id, start_date=None, end_date=None):
     if start_date and end_date:
         extra = " AND created_at>=? AND created_at<?"
         exp_q += extra; inc_q += extra
-        params += [start_date.isoformat(), (end_date+datetime.timedelta(days=1)).isoformat()]
+        params += _day_bounds(start_date, end_date)
     exp_q += " GROUP BY m ORDER BY m"; inc_q += " GROUP BY m ORDER BY m"
     cur.execute(exp_q, tuple(params)); expenses = cur.fetchall()
     cur.execute(inc_q, tuple(params)); incomes = cur.fetchall()
@@ -601,8 +611,8 @@ def db_sum_expense_by_category_in_period(user_id: int, category: str,
                                           end_date: datetime.datetime) -> float:
     conn = db_conn(); cur = conn.cursor()
     cur.execute("""SELECT COALESCE(SUM(amount),0) FROM expenses
-        WHERE user_id=? AND category=? AND created_at>=? AND created_at<=?""",
-        (user_id, category, start_date.isoformat(), end_date.isoformat()))
+        WHERE user_id=? AND category=? AND created_at>=? AND created_at<?""",
+        (user_id, category, *_day_bounds(start_date, end_date)))
     val = cur.fetchone()[0] or 0.0; conn.close()
     return float(val)
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -702,7 +712,7 @@ def db_get_incomes_filtered(user_id: int, date_from=None, date_to=None,
         if date_from:
             sql += " AND created_at >= ?"; params.append(date_from)
         if date_to:
-            sql += " AND created_at <= ?"; params.append(date_to + " 23:59:59")
+            sql += " AND substr(created_at,1,10) <= ?"; params.append(date_to)
         if category:
             sql += " AND LOWER(source) LIKE ?"; params.append(f"%{category.lower()}%")
         if search:
@@ -724,7 +734,7 @@ def db_get_expenses_filtered(user_id: int, date_from=None, date_to=None,
         if date_from:
             sql += " AND created_at >= ?"; params.append(date_from)
         if date_to:
-            sql += " AND created_at <= ?"; params.append(date_to + " 23:59:59")
+            sql += " AND substr(created_at,1,10) <= ?"; params.append(date_to)
         if category:
             sql += " AND LOWER(category) LIKE ?"; params.append(f"%{category.lower()}%")
         if search:
@@ -793,6 +803,22 @@ def db_recurring_all():
     cur.execute("""SELECT id,user_id,ttype,amount,category,note,day_of_month,month,last_triggered,sched_json
         FROM recurring_transactions""")
     rows = cur.fetchall(); conn.close(); return rows
+
+def db_recurring_created_dates() -> dict:
+    """{rec_id: local (GMT+7) creation date}. created_at is SQLite CURRENT_TIMESTAMP (UTC)."""
+    conn = db_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, created_at FROM recurring_transactions")
+    rows = cur.fetchall(); conn.close()
+    out = {}
+    for rid, ca in rows:
+        try:
+            dt = datetime.datetime.fromisoformat(str(ca))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            out[rid] = dt.astimezone(_VN_TZ).date()
+        except Exception:
+            pass
+    return out
 
 
 # ── SECTION 2: _DashboardHandler ───────────────────────
@@ -884,7 +910,8 @@ def parse_amount(text: str) -> float:
     if t.endswith("k"):
         try: return float(t[:-1])*1_000
         except Exception: pass
-    return float(re.sub(r'[^0-9.]','',t) or 0)
+    try: return float(re.sub(r'[^0-9.]','',t) or 0)
+    except ValueError: return 0.0   # e.g. "." — callers treat 0 as invalid input
 
 def parse_date(date_str: str) -> datetime.datetime:
     today = datetime.date.today()
@@ -1189,7 +1216,7 @@ def get_period_dates(period_choice: str, uid: int = 0):
     if period_choice.startswith("m_"):          # m_YYYYMM
         y, m = int(period_choice[2:6]), int(period_choice[6:8])
         start = datetime.datetime(y, m, 1)
-        end = ((start.replace(day=28)+datetime.timedelta(days=4))-datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
+        end = ((start.replace(day=28)+datetime.timedelta(days=4)).replace(day=1)-datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
         suffix = t('period_m_suffix', uid).format(m=f"{m:02d}", y=y)
     elif period_choice.startswith("y_"):        # y_YYYY
         y = int(period_choice[2:])
@@ -1202,7 +1229,7 @@ def get_period_dates(period_choice: str, uid: int = 0):
         suffix = t('period_week_suffix', uid).format(start=start.strftime('%d/%m'), end=end.strftime('%d/%m'))
     elif period_choice == "month":
         start = today.replace(day=1,hour=0,minute=0,second=0,microsecond=0)
-        end = ((start.replace(day=28)+datetime.timedelta(days=4)) - datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
+        end = ((start.replace(day=28)+datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)).replace(hour=23,minute=59,second=59)
         suffix = t('period_month_suffix', uid).format(date=today.strftime('%m/%Y'))
     elif period_choice == "year":
         start = today.replace(month=1,day=1,hour=0,minute=0,second=0,microsecond=0)
@@ -1532,7 +1559,7 @@ def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
 
     def _month_range(y, m):
         s = datetime.datetime(y, m, 1)
-        e = ((s.replace(day=28) + datetime.timedelta(days=4)) - datetime.timedelta(days=1)).replace(hour=23, minute=59, second=59)
+        e = ((s.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)).replace(hour=23, minute=59, second=59)
         return s, e
 
     cur_y, cur_m = now.year, now.month
@@ -1563,11 +1590,11 @@ def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
                 pct  = (pnl / inv * 100) if inv > 0 else 0
                 crypto_total += val
                 c = "#00ff88" if pnl >= 0 else "#ff4757"
-                crow += (f"<tr><td>{sym}</td><td>{qty:g}</td><td>${price:,.2f}</td>"
+                crow += (f"<tr><td>{_html.escape(str(sym))}</td><td>{qty:g}</td><td>${price:,.2f}</td>"
                          f"<td>${val:,.2f}</td><td>${inv:,.2f}</td>"
                          f"<td style='color:{c}'>${pnl:+,.2f} ({pct:+.1f}%)</td></tr>")
         except Exception as ex:
-            crow = f"<tr><td colspan='6' class='empty'>{L['err']}: {ex}</td></tr>"; crypto_total = 0
+            crow = f"<tr><td colspan='6' class='empty'>{L['err']}: {_html.escape(str(ex))}</td></tr>"; crypto_total = 0
 
         _no_data = f'<tr><td colspan="6" class="empty">{L["crypto_no_data"]}</td></tr>'
         crypto_summary_html = f"""
@@ -1588,23 +1615,26 @@ def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
                 tid, sym, cg, side, qty, price, fee, note, cat = t
                 dt = str(cat or "")[:10]
                 side_cls = "green" if side == "BUY" else "red"
-                safe_note = str(note or "").replace("'", "&#39;").replace('"', "&quot;")
+                safe_note = _html.escape(str(note or ""), quote=True)
+                # JSON literal for the onclick JS, then attribute-escaped (the HTML parser
+                # decodes entities before JS runs, so quote-escaping alone was injectable).
+                js_note = _html.escape(json.dumps(str(note or "")), quote=True)
                 ct_rows += (
                     f"<tr>"
                     f"<td>{dt}</td>"
-                    f"<td><b>{sym}</b></td>"
-                    f"<td class='{side_cls}'>{side}</td>"
+                    f"<td><b>{_html.escape(str(sym))}</b></td>"
+                    f"<td class='{side_cls}'>{_html.escape(str(side))}</td>"
                     f"<td>{qty:g}</td>"
                     f"<td>${price:,.4f}</td>"
                     f"<td>${fee:,.4f}</td>"
                     f"<td>{safe_note}</td>"
                     f"<td style='white-space:nowrap'>"
-                    f"<button class='btn-sm' onclick=\"openEdit('crypto',{{id:{tid},qty:{qty},price:{price},fee:{fee},note:'{safe_note}'}})\">&#x270F;&#xFE0F;</button> "
+                    f"<button class='btn-sm' onclick=\"openEdit('crypto',{{id:{tid},qty:{qty},price:{price},fee:{fee},note:{js_note}}})\">&#x270F;&#xFE0F;</button> "
                     f"<button class='btn-del' onclick='deleteCrypto({tid})'>&#x1F5D1;&#xFE0F;</button>"
                     f"</td></tr>"
                 )
         except Exception as ex:
-            ct_rows = f"<tr><td colspan='8' class='empty'>{L['err']}: {ex}</td></tr>"
+            ct_rows = f"<tr><td colspan='8' class='empty'>{L['err']}: {_html.escape(str(ex))}</td></tr>"
 
         _no_trades = f'<tr><td colspan="8" class="empty">{L["no_trades"]}</td></tr>'
         crypto_trades_html = f"""
@@ -1651,7 +1681,7 @@ def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
                 "trend":     {"labels": tl, "income": ti, "expense": te},
                 "exp_donut": {"labels": [r[0] for r in tm_eg], "values": [round(r[1]) for r in tm_eg]},
                 "inc_donut": {"labels": [r[0] for r in tm_ig], "values": [round(r[1]) for r in tm_ig]},
-            })
+            }).replace("</", "<\\/")  # embedded in <script>: a "</script>" label must not close it
 
             if budgets:
                 bhtml = f"<div class='card'><h2>{L['budget_title']} {cur_m:02d}/{cur_y}</h2>"
@@ -1661,7 +1691,7 @@ def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
                     bc    = "#ff4757" if pct2 >= 100 else "#ffa502" if pct2 >= 80 else "#00ff88"
                     bhtml += (
                         f"<div class='budget-row'>"
-                        f"<div class='budget-label'><span>{cat}</span>"
+                        f"<div class='budget-label'><span>{_html.escape(str(cat))}</span>"
                         f"<span class='{'red' if pct2>=100 else ''}'>{spent:,.0f} / {lim:,.0f} &#x111; ({pct2:.0f}%)</span></div>"
                         f"<div class='budget-bar'><div class='budget-fill' style='width:{pct2:.1f}%;background:{bc}'></div></div>"
                         f"</div>"
@@ -1671,10 +1701,10 @@ def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
             def _pct(v, total): return f"{v/total*100:.1f}%" if total > 0 else "–"
             def _inc_rows(groups, total):
                 if not groups: return f"<tr><td colspan='3' class='empty'>{L['no_income']}</td></tr>"
-                return "".join(f"<tr><td>{r[0]}</td><td class='amount green'>{r[1]:,.0f} &#x111;</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
+                return "".join(f"<tr><td>{_html.escape(str(r[0]))}</td><td class='amount green'>{r[1]:,.0f} &#x111;</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
             def _exp_rows(groups, total):
                 if not groups: return f"<tr><td colspan='3' class='empty'>{L['no_expense']}</td></tr>"
-                return "".join(f"<tr><td>{r[0]}</td><td class='amount red'>{r[1]:,.0f} &#x111;</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
+                return "".join(f"<tr><td>{_html.escape(str(r[0]))}</td><td class='amount red'>{r[1]:,.0f} &#x111;</td><td>{_pct(r[1],total)}</td></tr>" for r in groups)
 
             def _bc(v): return "#00ff88" if v >= 0 else "#ff4757"
 
@@ -1743,7 +1773,7 @@ def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
             </div>"""
 
         except Exception as ex:
-            finance_html = f"<div class='card'><p style='color:#ff4757'>{L['err']}: {ex}</p></div>"
+            finance_html = f"<div class='card'><p style='color:#ff4757'>{L['err']}: {_html.escape(str(ex))}</p></div>"
 
         income_list_html = ""
         expense_list_html = ""
@@ -2050,23 +2080,23 @@ function openEdit(scope,data){{
       <label>${{TXT.qty}}<input id="f_qty" class="finput" type="number" step="any" value="${{data.qty}}"></label>
       <label>${{TXT.price_usd}}<input id="f_price" class="finput" type="number" step="any" value="${{data.price}}"></label>
       <label>${{TXT.fee_usd}}<input id="f_fee" class="finput" type="number" step="any" value="${{data.fee}}"></label>
-      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{data.note||''}}"></label>
+      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{esc(data.note)}}"></label>
     `;
   }} else if(scope==='income'){{
     document.getElementById('modalTitle').textContent=TXT.edit_income;
     document.getElementById('modalBody').innerHTML=`
       <label>${{TXT.amount}}<input id="f_amount" class="finput" type="number" step="any" value="${{data.amount}}"></label>
-      <label>${{TXT.source}}<input id="f_cat" class="finput" value="${{data.cat||''}}"></label>
-      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{data.note||''}}"></label>
-      <label>${{TXT.date}}<input id="f_date" class="finput" type="date" value="${{(data.date||'').slice(0,10)}}"></label>
+      <label>${{TXT.source}}<input id="f_cat" class="finput" value="${{esc(data.cat)}}"></label>
+      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{esc(data.note)}}"></label>
+      <label>${{TXT.date}}<input id="f_date" class="finput" type="date" value="${{esc((data.date||'').slice(0,10))}}"></label>
     `;
   }} else {{
     document.getElementById('modalTitle').textContent=TXT.edit_expense;
     document.getElementById('modalBody').innerHTML=`
       <label>${{TXT.amount}}<input id="f_amount" class="finput" type="number" step="any" value="${{data.amount}}"></label>
-      <label>${{TXT.category}}<input id="f_cat" class="finput" value="${{data.cat||''}}"></label>
-      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{data.note||''}}"></label>
-      <label>${{TXT.date}}<input id="f_date" class="finput" type="date" value="${{(data.date||'').slice(0,10)}}"></label>
+      <label>${{TXT.category}}<input id="f_cat" class="finput" value="${{esc(data.cat)}}"></label>
+      <label>${{TXT.note}}<input id="f_note" class="finput" value="${{esc(data.note)}}"></label>
+      <label>${{TXT.date}}<input id="f_date" class="finput" type="date" value="${{esc((data.date||'').slice(0,10))}}"></label>
     `;
   }}
   document.getElementById('modal').style.display='flex';
@@ -2137,6 +2167,7 @@ async function deleteFinance(id,ttype){{
 }}
 
 function v(id){{const el=document.getElementById(id);return el?el.value:'';}}
+function esc(s){{return String(s??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));}}
 
 document.getElementById('modal').addEventListener('click',function(e){{
   if(e.target===this) closeModal();
@@ -2228,15 +2259,16 @@ function renderTable(tbodyId,rows,ttype){{
   if(!rows.length){{tb.innerHTML=`<tr><td colspan="5" class="empty">${{TXT.no_data}}</td></tr>`;return;}}
   const colorCls=ttype==='income'?'green':'red';
   tb.innerHTML=rows.map(r=>{{
-    const safeC=(r.cat||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;");
-    const safeN=(r.note||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;");
+    const safeC=esc(r.cat);
+    const safeN=esc(r.note);
+    const editArg=esc(JSON.stringify({{id:r.id,amount:r.amount,cat:r.cat||'',note:r.note||'',date:r.date||''}}));
     return `<tr>
-      <td>${{r.date}}</td>
+      <td>${{esc(r.date)}}</td>
       <td>${{safeC}}</td>
       <td>${{safeN}}</td>
       <td class="amount ${{colorCls}}">${{r.amount.toLocaleString('vi-VN')}} ₫</td>
       <td style="white-space:nowrap">
-        <button class="btn-sm" onclick="openEdit('${{ttype}}',{{id:${{r.id}},amount:${{r.amount}},cat:'${{safeC}}',note:'${{safeN}}',date:'${{r.date}}'}})">✏️</button>
+        <button class="btn-sm" onclick="openEdit('${{ttype}}',${{editArg}})">✏️</button>
         <button class="btn-del" onclick="deleteFinanceR(${{r.id}},'${{ttype}}')">🗑️</button>
       </td></tr>`;
   }}).join('');
@@ -2312,7 +2344,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
     def _check_auth(self, qs):
         if not DASHBOARD_SECRET:
             return True
-        return qs.get("token", [""])[0] == DASHBOARD_SECRET
+        return hmac.compare_digest(qs.get("token", [""])[0].encode("utf-8"),
+                                   DASHBOARD_SECRET.encode("utf-8"))
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -2860,7 +2893,8 @@ async def _execute_trade(update: Update, context: ContextTypes.DEFAULT_TYPE,
     await update.message.reply_text(msg)
 
 async def send_portfolio_images(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    positions, prices = _build_positions_and_prices(user_id)
+    # CoinGecko HTTP call (up to 10s) — run off the event loop.
+    positions, prices = await asyncio.to_thread(_build_positions_and_prices, user_id)
     if not positions:
         await context.bot.send_message(chat_id,"Danh mục trống. Dùng ➕ Mua để thêm giao dịch.")
         return
@@ -3816,7 +3850,7 @@ async def generate_report_for_period(update: Update, context: ContextTypes.DEFAU
         for i,(src,tot) in enumerate(incomes_g,1):
             pct=(tot/income*100) if income>0 else 0
             src_lbl=_lbl(_INCOME_LABELS,src,db_get_lang(uid))
-            report+=f"{i}. **{src_lbl}**: `{fmt_amount(tot,uid)}` ({pct:.1f}%)\n"
+            report+=f"{i}. *{src_lbl}*: `{fmt_amount(tot,uid)}` ({pct:.1f}%)\n"
         report+="\n"
     else: report+=t('report_no_income',uid)
     if expenses_g:
@@ -3824,7 +3858,7 @@ async def generate_report_for_period(update: Update, context: ContextTypes.DEFAU
         for i,(cat,tot) in enumerate(expenses_g,1):
             pct=(tot/expense*100) if expense>0 else 0
             cat_lbl=_lbl(_EXPENSE_LABELS,cat,db_get_lang(uid))
-            report+=f"{i}. **{cat_lbl}**: `{fmt_amount(tot,uid)}` ({pct:.1f}%)\n"
+            report+=f"{i}. *{cat_lbl}*: `{fmt_amount(tot,uid)}` ({pct:.1f}%)\n"
         report+="\n"
     else: report+=t('report_no_expense',uid)
     budgets=db_get_budgets(uid)
@@ -4363,6 +4397,54 @@ def _recur_due(day, month, sched_json, today):
         return (False, None)
     return (False, None)
 
+# Recurring schedules are interpreted in the user's local time (the job runs at
+# 08:00 Asia/Ho_Chi_Minh, which has no DST), not the server's clock (often UTC).
+_VN_TZ = datetime.timezone(datetime.timedelta(hours=7))
+
+def _recur_pending(day, month, sched_json, last_triggered, today, created_date=None):
+    """List of (due_date, period_key) not yet triggered with due_date <= today
+    (both `datetime.date`). Unlike `_recur_due`, this catches up dates missed while
+    the bot was offline. Dates before `created_date` are never back-filled; when
+    `created_date` is unknown only `today` itself can be due (old behaviour).
+    Legacy monthly/yearly entries with day 29–31 fall on the month's last day."""
+    import calendar as _cal
+    s = _recur_parse_sched(sched_json)
+    if not s:
+        if month is None:
+            y, m = today.year, today.month; pk = f"{y:04d}-{m:02d}"
+        else:
+            y, m = today.year, int(month); pk = f"{y:04d}"
+        due = datetime.date(y, m, min(int(day), _cal.monthrange(y, m)[1]))
+        if last_triggered == pk:
+            return []
+        if created_date is None:
+            return [(due, pk)] if due == today else []
+        return [(due, pk)] if created_date <= due <= today else []
+    lo = last_triggered if (last_triggered and len(str(last_triggered)) == 10) else None
+    floor = created_date if created_date is not None else today
+    out = []
+    if s.get('freq') == 'days':
+        for ds in sorted(set(s.get('dates', []))):
+            try: d = datetime.date.fromisoformat(ds)
+            except (TypeError, ValueError): continue
+            if d > today: break
+            if d < floor or (lo and ds <= lo): continue
+            out.append((d, ds))
+    elif s.get('freq') == 'daily':
+        months = _recur_span_months(s.get('start', ''), s.get('months', 1))
+        if not months:
+            return []
+        first = datetime.date(int(months[0][:4]), int(months[0][5:7]), 1)
+        ly, lm = int(months[-1][:4]), int(months[-1][5:7])
+        last = datetime.date(ly, lm, _cal.monthrange(ly, lm)[1])
+        d = max(first, floor)
+        if lo:
+            d = max(d, datetime.date.fromisoformat(lo) + datetime.timedelta(days=1))
+        while d <= min(last, today):
+            out.append((d, d.isoformat()))
+            d += datetime.timedelta(days=1)
+    return out
+
 def _recur_parse_days(text, year, month):
     """Parse '2,3 6  7' -> sorted valid day-of-month ints for the given year/month.
     Returns (days, invalid_tokens)."""
@@ -4781,29 +4863,35 @@ async def recurring_edit_value(update: Update, context: ContextTypes.DEFAULT_TYP
 # ── Daily job ─────────────────────────────────────────────
 
 async def check_recurring_job(context: ContextTypes.DEFAULT_TYPE):
-    today = datetime.datetime.now()
+    now_local = datetime.datetime.now(_VN_TZ).replace(tzinfo=None)
+    today = now_local.date()
     rows = db_recurring_all()
+    created_dates = db_recurring_created_dates()
     for row in rows:
         rec_id, user_id, ttype, amount, category, note, day, month, last_triggered, sched = row
-        due, period_key = _recur_due(day, month, sched, today)
-        if not due: continue
-        if last_triggered == period_key: continue
-        created_at = today
-        if ttype == 'income':
-            db_add_income(user_id, amount, category, note or '', created_at)
-        else:
-            db_add_expense(user_id, amount, note or '', category, created_at)
-        db_recurring_update_triggered(rec_id, period_key)
-        freq = _recur_sched_label(day, month, sched)
-        icon = "💰" if ttype == 'income' else "💸"
-        msg = (f"🔁 *Giao dịch định kỳ tự động*\n"
-               f"{icon} `{amount:,.0f} đ` — {category}\n"
-               f"📝 {note or '—'}\n"
-               f"📅 {freq} · {today.strftime('%d/%m/%Y')}")
         try:
-            await context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
+            pending = _recur_pending(day, month, sched, last_triggered, today, created_dates.get(rec_id))
         except Exception as e:
-            logger.warning(f"Recurring notify failed user {user_id}: {e}")
+            logger.warning(f"Recurring #{rec_id}: bad schedule ({e!r}), skipped")
+            continue
+        for due_date, period_key in pending:
+            # Missed (catch-up) entries are dated on their due day, not today.
+            created_at = now_local if due_date == today else datetime.datetime.combine(due_date, datetime.time(8, 0))
+            if ttype == 'income':
+                db_add_income(user_id, amount, category, note or '', created_at)
+            else:
+                db_add_expense(user_id, amount, note or '', category, created_at)
+            db_recurring_update_triggered(rec_id, period_key)
+            freq = _recur_sched_label(day, month, sched)
+            icon = "💰" if ttype == 'income' else "💸"
+            msg = (f"🔁 *Giao dịch định kỳ tự động*\n"
+                   f"{icon} `{amount:,.0f} đ` — {category}\n"
+                   f"📝 {note or '—'}\n"
+                   f"📅 {freq} · {due_date.strftime('%d/%m/%Y')}")
+            try:
+                await context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
+            except Exception as e:
+                logger.warning(f"Recurring notify failed user {user_id}: {e}")
 
 
 # ===================== MAIN =====================
