@@ -29,8 +29,8 @@ Bot Telegram song ngữ (EN/VI) tích hợp quản lý danh mục crypto, thu ch
 - Thêm / sửa / xóa giao dịch không cần reload trang
 - Biểu đồ xu hướng 13 tháng (Chart.js)
 - Import file CSV/Excel và export dữ liệu trực tiếp từ trình duyệt
-- 💾 **Backup & restore database** — tải xuống hoặc upload file `.db`
-- Bảo vệ bằng `?token=...` khi deploy lên server
+- 💾 **Backup & restore database** — tải xuống hoặc upload file `.db` (chỉ chủ bot, `OWNER_USER_ID`)
+- 🔒 Mỗi người dùng có **link cá nhân** `?user_id=...&token=...` (gõ `/dashboard` trong bot); token riêng, chỉ mở được dữ liệu của chính họ
 
 ### 🌍 Song Ngữ & Tiền Tệ
 - Chuyển ngôn ngữ bất kỳ lúc nào: 🇬🇧 English / 🇻🇳 Tiếng Việt

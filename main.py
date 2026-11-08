@@ -9,6 +9,7 @@ Univer All-in-One Bot
 from __future__ import annotations
 
 import os, io, csv, sqlite3, datetime, tempfile, asyncio, traceback, re, threading, logging, json, hmac
+import hashlib, secrets
 import html as _html
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
@@ -135,10 +136,53 @@ HTML_PORT = int(os.environ.get("HTML_PORT", "8080"))
 
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 
+# ── Dashboard access tokens ─────────────────────────────────
+# Every dashboard request must carry ?user_id=<id>&token=<token>, where the token is
+# an HMAC of that user id under a server-side key. So a link only ever opens its own
+# user's data and cannot be forged or reused for another id. The key is DASHBOARD_SECRET
+# if set; otherwise a random key is generated once and stored next to the database
+# (a separate file, so restoring a DB backup does not invalidate every link).
+_dash_key_cache: bytes | None = None
+
+def _dashboard_key() -> bytes:
+    global _dash_key_cache
+    if _dash_key_cache is not None:
+        return _dash_key_cache
+    if DASHBOARD_SECRET:
+        _dash_key_cache = DASHBOARD_SECRET.encode("utf-8")
+        return _dash_key_cache
+    path = DB_PATH + ".dashkey"
+    try:
+        with open(path, "rb") as f:
+            key = f.read().strip()
+        if len(key) >= 32:
+            _dash_key_cache = key
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32).encode("ascii")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+    except OSError as exc:
+        # Still safe: the key lives in memory, links just stop working after a restart.
+        logging.getLogger(__name__).warning(f"Cannot persist dashboard key to {path}: {exc}")
+    _dash_key_cache = key
+    return key
+
+def dashboard_token(user_id: int) -> str:
+    msg = f"dashboard:{int(user_id)}".encode("ascii")
+    return hmac.new(_dashboard_key(), msg, hashlib.sha256).hexdigest()[:40]
+
+def dashboard_link(user_id: int) -> str:
+    return f"http://localhost:{HTML_PORT}?user_id={int(user_id)}&token={dashboard_token(user_id)}"
+
 # ===================== I18N =====================
 from strings import SUPPORTED_LANGS, STRINGS, CURRENCY  # noqa: E402
 
-OWNER_USER_ID   = 679130099
+# Telegram id of the bot owner: the only account allowed to download/replace the whole DB.
+OWNER_USER_ID   = int(os.environ.get("OWNER_USER_ID", "679130099"))
 CHANNEL_CHAT_ID    = int(os.environ.get("CHANNEL_CHAT_ID",    "-1001974996093"))
 FINANCE_CHANNEL_ID = os.environ.get("FINANCE_CHANNEL_ID") or CHANNEL_CHAT_ID
 
@@ -570,11 +614,14 @@ def db_get_last_n_transactions(user_id: int, limit: int = 5):
     rows = cur.fetchall(); conn.close()
     return rows
 
-def db_delete_transaction(transaction_id: int, transaction_type: str):
+def db_delete_transaction(transaction_id: int, transaction_type: str, user_id: int) -> bool:
+    """Delete one of the user's own rows. Returns False if it doesn't exist / isn't theirs."""
     conn = db_conn(); cur = conn.cursor()
     table = "expenses" if transaction_type == 'expense' else "incomes"
-    cur.execute(f"DELETE FROM {table} WHERE id=?", (transaction_id,))
+    cur.execute(f"DELETE FROM {table} WHERE id=? AND user_id=?", (transaction_id, user_id))
+    n = cur.rowcount
     conn.commit(); conn.close()
+    return n > 0
 
 def db_reset_all_data(user_id: int):
     conn = db_conn(); cur = conn.cursor()
@@ -635,11 +682,13 @@ def db_crypto_get_trades(user_id: int):
         return []
 
 
-def db_crypto_delete_trade(trade_id: int):
-    """DELETE FROM crypto_trades WHERE id=?"""
+def db_crypto_delete_trade(trade_id: int, user_id: int) -> bool:
+    """Delete one of the user's own trades. Returns False if it doesn't exist / isn't theirs."""
     conn = db_conn(); cur = conn.cursor()
-    cur.execute("DELETE FROM crypto_trades WHERE id=?", (trade_id,))
+    cur.execute("DELETE FROM crypto_trades WHERE id=? AND user_id=?", (trade_id, user_id))
+    n = cur.rowcount
     conn.commit(); conn.close()
+    return n > 0
 
 
 def db_crypto_reset_all(user_id: int):
@@ -648,31 +697,40 @@ def db_crypto_reset_all(user_id: int):
     conn.commit(); conn.close()
 
 
-def db_crypto_update_trade(trade_id: int, qty: float, price: float, fee: float, note: str):
-    """UPDATE crypto_trades SET qty,price_usd,fee_usd,note WHERE id=?"""
+def db_crypto_update_trade(trade_id: int, qty: float, price: float, fee: float, note: str,
+                           user_id: int) -> bool:
+    """Update one of the user's own trades. Returns False if it doesn't exist / isn't theirs."""
     conn = db_conn(); cur = conn.cursor()
     cur.execute("""
-        UPDATE crypto_trades SET qty=?,price_usd=?,fee_usd=?,note=? WHERE id=?
-    """, (qty, price, fee, note, trade_id))
+        UPDATE crypto_trades SET qty=?,price_usd=?,fee_usd=?,note=? WHERE id=? AND user_id=?
+    """, (qty, price, fee, note, trade_id, user_id))
+    n = cur.rowcount
     conn.commit(); conn.close()
+    return n > 0
 
 
-def db_update_income(income_id: int, amount: float, source: str, note: str, date_str: str):
-    """UPDATE incomes SET amount,source,note,created_at WHERE id=?"""
+def db_update_income(income_id: int, amount: float, source: str, note: str, date_str: str,
+                     user_id: int) -> bool:
+    """Update one of the user's own incomes. Returns False if it doesn't exist / isn't theirs."""
     conn = db_conn(); cur = conn.cursor()
     cur.execute("""
-        UPDATE incomes SET amount=?,source=?,note=?,created_at=? WHERE id=?
-    """, (amount, source, note, date_str, income_id))
+        UPDATE incomes SET amount=?,source=?,note=?,created_at=? WHERE id=? AND user_id=?
+    """, (amount, source, note, date_str, income_id, user_id))
+    n = cur.rowcount
     conn.commit(); conn.close()
+    return n > 0
 
 
-def db_update_expense(expense_id: int, amount: float, category: str, note: str, date_str: str):
-    """UPDATE expenses SET amount,category,note,created_at WHERE id=?"""
+def db_update_expense(expense_id: int, amount: float, category: str, note: str, date_str: str,
+                      user_id: int) -> bool:
+    """Update one of the user's own expenses. Returns False if it doesn't exist / isn't theirs."""
     conn = db_conn(); cur = conn.cursor()
     cur.execute("""
-        UPDATE expenses SET amount=?,category=?,note=?,created_at=? WHERE id=?
-    """, (amount, category, note, date_str, expense_id))
+        UPDATE expenses SET amount=?,category=?,note=?,created_at=? WHERE id=? AND user_id=?
+    """, (amount, category, note, date_str, expense_id, user_id))
+    n = cur.rowcount
     conn.commit(); conn.close()
+    return n > 0
 
 
 def db_get_incomes_list(user_id: int, limit: int = 50):
@@ -1556,6 +1614,14 @@ def _make_html(user_id=None, lang: str = 'vi') -> str:  # noqa: C901
     L = _L[lang]
 
     uid_note = f"User ID: {user_id}" if user_id else L['uid_hint']
+    # Whole-database backup/restore is owner-only (the endpoints enforce it too).
+    db_tools_html = (
+        '<div style="text-align:center;margin-bottom:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">'
+        f'<button class="btn-sec" onclick="downloadDB()" style="font-size:.82em">{L["dl_db"]}</button>'
+        f'<label class="btn-sec" style="cursor:pointer;font-size:.82em">{L["ul_db"]}'
+        '<input type="file" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadDB(this)">'
+        '</label></div>'
+    ) if user_id and user_id == OWNER_USER_ID else ""
 
     def _month_range(y, m):
         s = datetime.datetime(y, m, 1)
@@ -1896,12 +1962,7 @@ label{{display:block;margin-bottom:10px;color:#94a3b8;font-size:.88em}}
 <body>
 <h1>&#x1F916; Univer Bot Dashboard</h1>
 <div class="subtitle">{uid_note} &middot; {L['updated']}: {ts}</div>
-<div style="text-align:center;margin-bottom:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
-  <button class="btn-sec" onclick="downloadDB()" style="font-size:.82em">{L['dl_db']}</button>
-  <label class="btn-sec" style="cursor:pointer;font-size:.82em">{L['ul_db']}
-    <input type="file" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadDB(this)">
-  </label>
-</div>
+{db_tools_html}
 
 {crypto_summary_html}
 {crypto_trades_html}
@@ -2329,26 +2390,37 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_403(self):
-        body = b"<h2>403 Forbidden</h2><p>Thieu token hoac token sai.</p>"
+    def _send_403(self, msg: str = "Link khong hop le hoac thieu token. Go /dashboard trong bot de lay link moi."):
+        body = f"<h2>403 Forbidden</h2><p>{_html.escape(msg)}</p>".encode("utf-8")
         self.send_response(403)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _check_auth(self, qs):
-        if not DASHBOARD_SECRET:
-            return True
-        return hmac.compare_digest(qs.get("token", [""])[0].encode("utf-8"),
-                                   DASHBOARD_SECRET.encode("utf-8"))
+    def _auth_uid(self, qs):
+        """Return the authenticated user id, or None. A request is authenticated only if
+        its token is the valid token for the user_id it names (always required, even
+        when DASHBOARD_SECRET is unset)."""
+        uid = self._uid(qs)
+        if uid is None:
+            return None
+        token = qs.get("token", [""])[0]
+        try:
+            ok = hmac.compare_digest(token.encode("utf-8"), dashboard_token(uid).encode("ascii"))
+        except Exception:
+            ok = False
+        return uid if ok else None
+
+    _MAX_BODY = 32 * 1024 * 1024   # largest accepted POST body (DB restore / big imports)
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0))
+        if length > self._MAX_BODY:
+            raise ValueError("request body too large")
         raw = self.rfile.read(length) if length else b"{}"
         return json.loads(raw.decode("utf-8"))
 
@@ -2363,18 +2435,20 @@ class _DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
-        if not self._check_auth(qs):
+        uid = self._auth_uid(qs)
+        if uid is None:
             self._send_403(); return
-        uid = self._uid(qs)
         if parsed.path == "/api/export":
             self._handle_export(uid, qs); return
         if parsed.path == "/api/finance/list":
             self._api_finance_list(uid, qs); return
         if parsed.path == "/api/finance/categories":
-            self._send_json(db_get_finance_categories(uid) if uid else {"income":[],"expense":[]}); return
+            self._send_json(db_get_finance_categories(uid)); return
         if parsed.path == "/api/db/download":
+            if uid != OWNER_USER_ID:
+                self._send_403("Chi chu bot moi duoc tai database."); return
             self._handle_db_download(); return
-        dash_lang = db_get_lang(uid) if uid else 'vi'
+        dash_lang = db_get_lang(uid)
         html = _make_html(uid, lang=dash_lang).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -2387,27 +2461,29 @@ class _DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
-        if not self._check_auth(qs):
+        uid = self._auth_uid(qs)
+        if uid is None:
             self._send_403(); return
-        uid = self._uid(qs)
+        path = parsed.path
+        if path == "/api/db/upload" and uid != OWNER_USER_ID:
+            self._send_403("Chi chu bot moi duoc thay database."); return
         try:
             body = self._read_body()
         except Exception as exc:
-            self._send_json({"error": f"JSON parse error: {exc}"}, 400); return
-        path = parsed.path
+            self._send_json({"error": f"Bad request: {exc}"}, 400); return
         try:
             if path == "/api/crypto/add":
                 self._api_crypto_add(uid, body)
             elif path == "/api/crypto/delete":
-                self._api_crypto_delete(body)
+                self._api_crypto_delete(uid, body)
             elif path == "/api/crypto/update":
-                self._api_crypto_update(body)
+                self._api_crypto_update(uid, body)
             elif path == "/api/finance/add":
                 self._api_finance_add(uid, body)
             elif path == "/api/finance/delete":
-                self._api_finance_delete(body)
+                self._api_finance_delete(uid, body)
             elif path == "/api/finance/update":
-                self._api_finance_update(body)
+                self._api_finance_update(uid, body)
             elif path == "/api/import":
                 self._api_import(uid, body); return
             elif path == "/api/db/upload":
@@ -2415,7 +2491,9 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"error": "unknown path"}, 404)
         except Exception as exc:
-            self._send_json({"error": str(exc), "trace": traceback.format_exc()}, 500)
+            # Keep the stack trace in the server log; never send it to the client.
+            logger.error(f"Dashboard POST {path} failed: {exc}\n{traceback.format_exc()}")
+            self._send_json({"error": "internal error"}, 500)
 
     # ── finance list (filterable) ─────────────────────
 
@@ -2427,7 +2505,10 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         date_to   = qs.get("date_to",   [""])[0].strip() or None
         category  = qs.get("category",  [""])[0].strip() or None
         search    = qs.get("search",    [""])[0].strip() or None
-        limit     = int(qs.get("limit", ["500"])[0])
+        try:
+            limit = max(1, min(int(qs.get("limit", ["500"])[0]), 2000))
+        except ValueError:
+            limit = 500
         result = {}
         if ttype in ("income", "all"):
             rows = db_get_incomes_filtered(uid, date_from, date_to, category if ttype=="income" else None, search, limit)
@@ -2512,14 +2593,15 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             db_crypto_upsert_map(symbol, cg_id)
         self._send_json({"ok": True})
 
-    def _api_crypto_delete(self, body):
+    def _api_crypto_delete(self, uid, body):
         trade_id = int(body.get("id", 0))
         if not trade_id:
             self._send_json({"error": "no id"}); return
-        db_crypto_delete_trade(trade_id)
+        if not db_crypto_delete_trade(trade_id, uid):
+            self._send_json({"error": "not found"}, 404); return
         self._send_json({"ok": True})
 
-    def _api_crypto_update(self, body):
+    def _api_crypto_update(self, uid, body):
         trade_id = int(body.get("id", 0))
         if not trade_id:
             self._send_json({"error": "no id"}); return
@@ -2527,7 +2609,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         price = float(body.get("price", 0))
         fee   = float(body.get("fee", 0) or 0)
         note  = str(body.get("note", "") or "")
-        db_crypto_update_trade(trade_id, qty, price, fee, note)
+        if not db_crypto_update_trade(trade_id, qty, price, fee, note, uid):
+            self._send_json({"error": "not found"}, 404); return
         self._send_json({"ok": True})
 
     # ── finance API ───────────────────────────────────
@@ -2552,15 +2635,16 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             db_add_expense(uid, amount, note, category or "Khác", created_at)
         self._send_json({"ok": True})
 
-    def _api_finance_delete(self, body):
+    def _api_finance_delete(self, uid, body):
         rec_id = int(body.get("id", 0))
         ttype  = str(body.get("ttype", "expense"))
         if not rec_id:
             self._send_json({"error": "no id"}); return
-        db_delete_transaction(rec_id, ttype)
+        if not db_delete_transaction(rec_id, ttype, uid):
+            self._send_json({"error": "not found"}, 404); return
         self._send_json({"ok": True})
 
-    def _api_finance_update(self, body):
+    def _api_finance_update(self, uid, body):
         rec_id   = int(body.get("id", 0))
         ttype    = str(body.get("ttype", "expense"))
         amount   = float(body.get("amount", 0))
@@ -2572,9 +2656,11 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         if not date_s:
             date_s = datetime.datetime.now().isoformat()
         if ttype == "income":
-            db_update_income(rec_id, amount, category or "Khác", note, date_s)
+            found = db_update_income(rec_id, amount, category or "Khác", note, date_s, uid)
         else:
-            db_update_expense(rec_id, amount, category or "Khác", note, date_s)
+            found = db_update_expense(rec_id, amount, category or "Khác", note, date_s, uid)
+        if not found:
+            self._send_json({"error": "not found"}, 404); return
         self._send_json({"ok": True})
 
     # ── import API ────────────────────────────────────
@@ -3131,10 +3217,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    token_part = f"&token={DASHBOARD_SECRET}" if DASHBOARD_SECRET else ""
-    link = f"http://localhost:{HTML_PORT}?user_id={uid}{token_part}"
-    secret_note = (t('dashboard_secret', uid).format(secret=DASHBOARD_SECRET) if DASHBOARD_SECRET
-                   else t('dashboard_no_secret', uid))
+    link = dashboard_link(uid)
+    secret_note = t('dashboard_private', uid)
     await update.message.reply_text(
         f"{t('dashboard_title', uid)}\n\n"
         f"{t('dashboard_id', uid).format(uid=uid)}\n"
@@ -3287,10 +3371,8 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t('currency_choose', uid), reply_markup=kb)
     elif action == "dashboard":
         lang = db_get_lang(uid)
-        token_part = f"&token={DASHBOARD_SECRET}" if DASHBOARD_SECRET else ""
-        link = f"http://localhost:{HTML_PORT}?user_id={uid}{token_part}"
-        secret_note = (t('dashboard_secret', uid).format(secret=DASHBOARD_SECRET)
-                       if DASHBOARD_SECRET else t('dashboard_no_secret', uid))
+        link = dashboard_link(uid)
+        secret_note = t('dashboard_private', uid)
         text = (
             f"{t('dashboard_title', uid)}\n\n"
             f"{t('dashboard_id', uid).format(uid=uid)}\n"
@@ -3776,10 +3858,10 @@ async def delete_choose_item(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def delete_confirm_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="confirm_delete_yes":
-        db_delete_transaction(context.user_data.get('id_to_delete'),context.user_data.get('type_to_delete'))
+        db_delete_transaction(context.user_data.get('id_to_delete'),context.user_data.get('type_to_delete'),uid)
         return await end_conv(update,context,t('del_done',uid))
     elif q.data=="confirm_delete_crypto_yes":
-        db_crypto_delete_trade(context.user_data.get('id_to_delete'))
+        db_crypto_delete_trade(context.user_data.get('id_to_delete'),uid)
         return await end_conv(update,context,t('del_done_crypto',uid))
     return await end_conv(update,context,t('del_cancelled',uid))
 
