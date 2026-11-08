@@ -111,8 +111,7 @@ STRINGS: dict[str, dict[str, str]] = {
         'dashboard_title':  '🌐 *HTML Dashboard*',
         'dashboard_id':     '🪪 Telegram ID: `{uid}`',
         'dashboard_link':   '🔗 Link: `{link}`',
-        'dashboard_no_secret': '\n⚠️ DASHBOARD\\_SECRET not set — add to .env',
-        'dashboard_secret': '\n🔑 Token: `{secret}`',
+        'dashboard_private': '\n🔒 Personal link — it only opens your own data. Do not share it.',
         'dashboard_features': (
             'Features:\n'
             '• 📊 Portfolio & finance overview\n'
@@ -435,8 +434,7 @@ STRINGS: dict[str, dict[str, str]] = {
         'dashboard_title':  '🌐 *HTML Dashboard*',
         'dashboard_id':     '🪪 Telegram ID: `{uid}`',
         'dashboard_link':   '🔗 Link: `{link}`',
-        'dashboard_no_secret': '\n⚠️ Chưa đặt DASHBOARD\\_SECRET — nên thêm vào .env',
-        'dashboard_secret': '\n🔑 Token: `{secret}`',
+        'dashboard_private': '\n🔒 Link cá nhân — chỉ mở được dữ liệu của bạn. Đừng chia sẻ link này.',
         'dashboard_features': (
             'Tính năng:\n'
             '• 📊 Xem portfolio crypto & thu chi\n'
