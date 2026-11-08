@@ -6,7 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+COPY main.py strings.py ./
 COPY .env.example .
 
 # Thư mục data để mount volume (giữ DB khi restart)
