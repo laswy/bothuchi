@@ -275,7 +275,13 @@ def run_migrations():
         day_of_month INTEGER NOT NULL,
         month INTEGER,
         last_triggered TEXT,
+        sched_json TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    # Upgrade: flexible scheduling (daily / specific-days over a month span)
+    cur.execute("PRAGMA table_info(recurring_transactions)")
+    rcols = {row[1] for row in cur.fetchall()}
+    if 'sched_json' not in rcols:
+        cur.execute("ALTER TABLE recurring_transactions ADD COLUMN sched_json TEXT")
     conn.commit()
     conn.close()
 
@@ -746,22 +752,22 @@ def db_get_finance_categories(user_id: int):
 
 # ── Recurring transactions DB ──────────────────────────
 
-def db_recurring_add(user_id, ttype, amount, category, note, day, month=None):
+def db_recurring_add(user_id, ttype, amount, category, note, day, month=None, sched_json=None):
     conn = db_conn(); cur = conn.cursor()
     cur.execute("""INSERT INTO recurring_transactions
-        (user_id,ttype,amount,category,note,day_of_month,month)
-        VALUES (?,?,?,?,?,?,?)""", (user_id, ttype, amount, category, note or '', day, month))
+        (user_id,ttype,amount,category,note,day_of_month,month,sched_json)
+        VALUES (?,?,?,?,?,?,?,?)""", (user_id, ttype, amount, category, note or '', day, month, sched_json))
     conn.commit(); conn.close()
 
 def db_recurring_list(user_id):
     conn = db_conn(); cur = conn.cursor()
-    cur.execute("""SELECT id,ttype,amount,category,note,day_of_month,month,last_triggered
+    cur.execute("""SELECT id,ttype,amount,category,note,day_of_month,month,last_triggered,sched_json
         FROM recurring_transactions WHERE user_id=? ORDER BY month,day_of_month""", (user_id,))
     rows = cur.fetchall(); conn.close(); return rows
 
 def db_recurring_get(rec_id):
     conn = db_conn(); cur = conn.cursor()
-    cur.execute("""SELECT id,user_id,ttype,amount,category,note,day_of_month,month,last_triggered
+    cur.execute("""SELECT id,user_id,ttype,amount,category,note,day_of_month,month,last_triggered,sched_json
         FROM recurring_transactions WHERE id=?""", (rec_id,))
     row = cur.fetchone(); conn.close(); return row
 
@@ -784,7 +790,7 @@ def db_recurring_update_triggered(rec_id, period_key):
 
 def db_recurring_all():
     conn = db_conn(); cur = conn.cursor()
-    cur.execute("""SELECT id,user_id,ttype,amount,category,note,day_of_month,month,last_triggered
+    cur.execute("""SELECT id,user_id,ttype,amount,category,note,day_of_month,month,last_triggered,sched_json
         FROM recurring_transactions""")
     rows = cur.fetchall(); conn.close(); return rows
 
@@ -3388,6 +3394,9 @@ RECURRING_ADD_MONTH = 29
 RECURRING_EDIT_FIELD = 30
 RECURRING_EDIT_VALUE = 31
 RECURRING_DELETE_CONFIRM = 32
+RECURRING_ADD_SPAN_COUNT = 33
+RECURRING_ADD_SPAN_START = 34
+RECURRING_ADD_DAYS_INPUT = 35
 
 # ===================== FINANCE HELPERS =====================
 def anonymize_name(name: str) -> str:
@@ -4213,6 +4222,12 @@ def build_app() -> "Application":
                 CallbackQueryHandler(recurring_pick_freq,        pattern="^recur_freq_")],
             RECURRING_ADD_MONTH:[
                 CallbackQueryHandler(recurring_pick_month,       pattern="^recur_month_")],
+            RECURRING_ADD_SPAN_COUNT:[
+                CallbackQueryHandler(recurring_pick_span_count,  pattern="^recur_span_")],
+            RECURRING_ADD_SPAN_START:[
+                CallbackQueryHandler(recurring_pick_span_start,  pattern="^recur_start_")],
+            RECURRING_ADD_DAYS_INPUT:[
+                MessageHandler(filters.TEXT & ~filters.COMMAND,  recurring_days_input)],
             RECURRING_EDIT_FIELD:[
                 CallbackQueryHandler(recurring_edit_field,       pattern="^recur_field_|^recur_back_list$")],
             RECURRING_EDIT_VALUE:[
@@ -4281,14 +4296,97 @@ def build_app() -> "Application":
 def _recurring_freq_str(month) -> str:
     return "hàng tháng" if month is None else f"hàng năm (tháng {month})"
 
+def _recur_parse_sched(sched_json):
+    """Return the parsed schedule dict, or None for legacy monthly/yearly entries."""
+    if not sched_json:
+        return None
+    try:
+        s = json.loads(sched_json)
+        return s if isinstance(s, dict) else None
+    except Exception:
+        return None
+
+def _recur_span_months(start, n):
+    """List of 'YYYY-MM' for n consecutive months starting at 'YYYY-MM'."""
+    y, m = int(start[:4]), int(start[5:7])
+    out = []
+    for i in range(int(n)):
+        mm = m - 1 + i
+        out.append(f"{y + mm // 12:04d}-{mm % 12 + 1:02d}")
+    return out
+
+def _recur_sched_label(day, month, sched_json) -> str:
+    """Human-readable schedule text that understands the new flexible types."""
+    s = _recur_parse_sched(sched_json)
+    if not s:
+        return "hàng tháng" if month is None else f"hàng năm (tháng {month})"
+    if s.get('freq') == 'daily':
+        months = _recur_span_months(s.get('start', ''), s.get('months', 1))
+        rng = f"{months[0]}…{months[-1]}" if months else "?"
+        return f"hằng ngày ({rng})"
+    if s.get('freq') == 'days':
+        ds = s.get('dates', [])
+        return f"{len(ds)} ngày đã chọn ({ds[0]}…{ds[-1]})" if ds else "chọn ngày (trống)"
+    return "—"
+
+def _recur_short_freq(day, month, sched_json) -> str:
+    """Compact schedule tag for the list keyboard button."""
+    s = _recur_parse_sched(sched_json)
+    if not s:
+        return f"ngày {day}/" + ("tháng" if month is None else f"năm/T{month}")
+    if s.get('freq') == 'daily':
+        return f"hằng ngày ×{s.get('months', 1)}th"
+    if s.get('freq') == 'days':
+        return f"{len(s.get('dates', []))} ngày đã chọn"
+    return "—"
+
+def _recur_due(day, month, sched_json, today):
+    """Return (is_due, period_key) for `today` (a datetime).
+    period_key is stored in last_triggered to avoid firing twice in one period."""
+    s = _recur_parse_sched(sched_json)
+    if not s:
+        # Legacy monthly / yearly
+        if today.day != day:
+            return (False, None)
+        if month is not None and today.month != month:
+            return (False, None)
+        pk = today.strftime('%Y-%m') if month is None else today.strftime('%Y')
+        return (True, pk)
+    tkey = today.strftime('%Y-%m-%d')
+    if s.get('freq') == 'days':
+        if tkey in set(s.get('dates', [])):
+            return (True, tkey)
+        return (False, None)
+    if s.get('freq') == 'daily':
+        if today.strftime('%Y-%m') in set(_recur_span_months(s.get('start', ''), s.get('months', 1))):
+            return (True, tkey)
+        return (False, None)
+    return (False, None)
+
+def _recur_parse_days(text, year, month):
+    """Parse '2,3 6  7' -> sorted valid day-of-month ints for the given year/month.
+    Returns (days, invalid_tokens)."""
+    import calendar as _cal
+    dim = _cal.monthrange(year, month)[1]
+    days, bad = [], []
+    for tok in re.split(r'[\s,]+', text.strip()):
+        if not tok:
+            continue
+        if tok.isdigit() and 1 <= int(tok) <= dim:
+            d = int(tok)
+            if d not in days:
+                days.append(d)
+        else:
+            bad.append(tok)
+    return (sorted(days), bad)
+
 def _recurring_list_kb(items) -> InlineKeyboardMarkup:
     kb = []
     for r in items:
-        rid, ttype, amount, category, note, day, month, _ = r
-        freq = "tháng" if month is None else f"năm/T{month}"
+        rid, ttype, amount, category, note, day, month, _, sched = r
         icon = "💰" if ttype == "income" else "💸"
-        label = f"{icon} {note or category} {amount:,.0f}đ ngày {day}/{freq}"
-        kb.append([InlineKeyboardButton(label[:48], callback_data=f"recur_noop_{rid}")])
+        label = f"{icon} {note or category} {amount:,.0f}đ · {_recur_short_freq(day, month, sched)}"
+        kb.append([InlineKeyboardButton(label[:60], callback_data=f"recur_noop_{rid}")])
         kb.append([InlineKeyboardButton("✏️ Sửa", callback_data=f"recur_edit_{rid}"),
                    InlineKeyboardButton("🗑️ Xóa", callback_data=f"recur_del_{rid}")])
     kb.append([InlineKeyboardButton("➕ Thêm khoản mới", callback_data="recur_add")])
@@ -4326,13 +4424,13 @@ async def recurring_list_callback(update: Update, context: ContextTypes.DEFAULT_
         row = db_recurring_get(rec_id)
         if not row: await q.edit_message_text("Không tìm thấy khoản này."); return ConversationHandler.END
         context.user_data.update({'recur_edit_id': rec_id, 'recur_edit_row': row})
-        _, _, ttype, amount, category, note, day, month, _ = row
+        _, _, ttype, amount, category, note, day, month, _, sched = row
         info = (f"📋 *Khoản định kỳ hiện tại:*\n"
                 f"Loại: {'💰 Thu nhập' if ttype=='income' else '💸 Chi tiêu'}\n"
                 f"Số tiền: `{amount:,.0f} đ`\n"
                 f"Danh mục: {category}\n"
                 f"Ghi chú: {note or '—'}\n"
-                f"Lịch: ngày {day} {_recurring_freq_str(month)}\n\nSửa trường nào?")
+                f"Lịch: {_recur_sched_label(day, month, sched)}\n\nSửa trường nào?")
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("💰 Số tiền",       callback_data="recur_field_amount"),
              InlineKeyboardButton("📌 Danh mục",      callback_data="recur_field_category")],
@@ -4346,12 +4444,12 @@ async def recurring_list_callback(update: Update, context: ContextTypes.DEFAULT_
         row = db_recurring_get(rec_id)
         if not row: await q.edit_message_text("Không tìm thấy."); return ConversationHandler.END
         context.user_data['recur_del_id'] = rec_id
-        _, _, ttype, amount, category, note, day, month, _ = row
+        _, _, ttype, amount, category, note, day, month, _, sched = row
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton(t('recur_btn_del',uid), callback_data="recur_del_confirm"),
              InlineKeyboardButton(t('recur_back',uid), callback_data="recur_back_list")]])
         await q.edit_message_text(
-            t('recur_del_q',uid).format(label=note or category,amount=fmt_amount(amount,uid),day=day,freq=_recurring_freq_str(month)),
+            t('recur_del_q',uid).format(label=note or category,amount=fmt_amount(amount,uid),day=day,freq=_recur_sched_label(day, month, sched)),
             reply_markup=kb, parse_mode='Markdown')
         return RECURRING_DELETE_CONFIRM
     elif q.data == "recur_back_list":
@@ -4388,12 +4486,49 @@ async def recurring_get_category(update: Update, context: ContextTypes.DEFAULT_T
     await q.edit_message_text(t('fin_enter_note',uid))
     return RECURRING_ADD_NOTE
 
+def _recur_freq_kb(uid):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t('recur_monthly',uid), callback_data="recur_freq_monthly"),
+         InlineKeyboardButton(t('recur_yearly',uid),  callback_data="recur_freq_yearly")],
+        [InlineKeyboardButton("📆 Chọn ngày (2–3 tháng)", callback_data="recur_freq_days")],
+        [InlineKeyboardButton("📅 Hằng ngày (theo tháng)", callback_data="recur_freq_daily")],
+        [InlineKeyboardButton("❌ Hủy", callback_data="cancel_action")]])
+
+def _recur_start_month_kb():
+    now = datetime.datetime.now()
+    btns = []
+    for i in range(6):
+        mm = now.month - 1 + i
+        yy = now.year + mm // 12
+        m = mm % 12 + 1
+        btns.append(InlineKeyboardButton(f"T{m}/{yy}", callback_data=f"recur_start_{yy:04d}-{m:02d}"))
+    rows = [btns[i:i+2] for i in range(0, len(btns), 2)]
+    rows.append([InlineKeyboardButton("❌ Hủy", callback_data="cancel_action")])
+    return InlineKeyboardMarkup(rows)
+
 async def recurring_get_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid=update.effective_user.id
     txt = update.message.text.strip()
     context.user_data['recur_note'] = '' if txt == '-' else txt
-    await update.message.reply_text(t('recur_pick_day',uid))
-    return RECURRING_ADD_DAY
+    await update.message.reply_text("🔁 *Chọn tần suất:*", reply_markup=_recur_freq_kb(uid), parse_mode='Markdown')
+    return RECURRING_ADD_FREQ
+
+async def recurring_pick_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer(); uid = q.from_user.id
+    choice = q.data.replace("recur_freq_", "")
+    context.user_data['recur_freq'] = choice
+    if choice in ("monthly", "yearly"):
+        await q.edit_message_text(t('recur_pick_day',uid))
+        return RECURRING_ADD_DAY
+    # daily / days → ask how many consecutive months first
+    context.user_data['recur_mode'] = choice
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("1 tháng", callback_data="recur_span_1"),
+         InlineKeyboardButton("2 tháng", callback_data="recur_span_2"),
+         InlineKeyboardButton("3 tháng", callback_data="recur_span_3")],
+        [InlineKeyboardButton("❌ Hủy", callback_data="cancel_action")]])
+    await q.edit_message_text("📆 *Áp dụng cho bao nhiêu tháng liên tiếp?*", reply_markup=kb, parse_mode='Markdown')
+    return RECURRING_ADD_SPAN_COUNT
 
 async def recurring_get_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid=update.effective_user.id
@@ -4403,33 +4538,84 @@ async def recurring_get_day(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except ValueError:
         await update.message.reply_text(t('recur_invalid_day',uid)); return RECURRING_ADD_DAY
     context.user_data['recur_day'] = day
-    uid=update.effective_user.id
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(t('recur_monthly',uid), callback_data="recur_freq_monthly"),
-         InlineKeyboardButton(t('recur_yearly',uid),  callback_data="recur_freq_yearly")]])
-    await update.message.reply_text(t('recur_pick_freq',uid), reply_markup=kb)
-    return RECURRING_ADD_FREQ
-
-async def recurring_pick_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q = update.callback_query; await q.answer()
-    if q.data == "recur_freq_monthly":
-        context.user_data['recur_month'] = None
-        return await _recurring_save_new(q, context)
-    months = ["T1","T2","T3","T4","T5","T6","T7","T8","T9","T10","T11","T12"]
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(m, callback_data=f"recur_month_{i+1}")
-                                for i, m in enumerate(row, start=ri*4)]
-                               for ri, row in enumerate([months[i:i+4] for i in range(0,12,4)])])
-    uid=q.from_user.id
-    await q.edit_message_text(t('recur_add_month',uid), reply_markup=kb)
-    return RECURRING_ADD_MONTH
+    if context.user_data.get('recur_freq') == 'yearly':
+        months = ["T1","T2","T3","T4","T5","T6","T7","T8","T9","T10","T11","T12"]
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(m, callback_data=f"recur_month_{i+1}")
+                                    for i, m in enumerate(row, start=ri*4)]
+                                   for ri, row in enumerate([months[i:i+4] for i in range(0,12,4)])])
+        await update.message.reply_text(t('recur_add_month',uid), reply_markup=kb)
+        return RECURRING_ADD_MONTH
+    context.user_data['recur_month'] = None
+    return await _recurring_save_new(update.message, context)
 
 async def recurring_pick_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query; await q.answer()
     context.user_data['recur_month'] = int(q.data.replace("recur_month_", ""))
     return await _recurring_save_new(q, context)
 
-async def _recurring_save_new(q, context) -> int:
-    uid = q.from_user.id; d = context.user_data
+async def recurring_pick_span_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer()
+    context.user_data['recur_span'] = int(q.data.replace("recur_span_", ""))
+    await q.edit_message_text("📅 *Bắt đầu từ tháng nào?*", reply_markup=_recur_start_month_kb(), parse_mode='Markdown')
+    return RECURRING_ADD_SPAN_START
+
+async def recurring_pick_span_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query; await q.answer(); uid = q.from_user.id
+    start = q.data.replace("recur_start_", "")        # 'YYYY-MM'
+    count = context.user_data.get('recur_span', 1)
+    months = _recur_span_months(start, count)
+    context.user_data['recur_target_months'] = months
+    if context.user_data.get('recur_mode') == 'daily':
+        sched = {"freq": "daily", "start": start, "months": count}
+        return await _recurring_save_flex(q, context, sched)
+    # days mode → ask the working days for each month, one at a time
+    context.user_data['recur_month_idx'] = 0
+    context.user_data['recur_dates'] = []
+    return await _recurring_prompt_days(q, context)
+
+async def _recurring_prompt_days(target, context) -> int:
+    months = context.user_data['recur_target_months']
+    idx = context.user_data['recur_month_idx']
+    y, m = int(months[idx][:4]), int(months[idx][5:7])
+    msg = (f"📆 *Tháng {m}/{y}* ({idx+1}/{len(months)})\n"
+           f"Nhập các ngày làm việc, cách nhau bởi dấu phẩy hoặc dấu cách.\n"
+           f"Ví dụ: `2, 3, 6, 7, 13, 14`\n"
+           f"(gõ `-` để bỏ qua tháng này)")
+    if hasattr(target, "edit_message_text"):
+        await target.edit_message_text(msg, parse_mode='Markdown')
+    else:
+        await target.reply_text(msg, parse_mode='Markdown')
+    return RECURRING_ADD_DAYS_INPUT
+
+async def recurring_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = update.effective_user.id
+    months = context.user_data['recur_target_months']
+    idx = context.user_data['recur_month_idx']
+    y, m = int(months[idx][:4]), int(months[idx][5:7])
+    text = update.message.text.strip()
+    if text != '-':
+        days, bad = _recur_parse_days(text, y, m)
+        if bad or not days:
+            await update.message.reply_text(
+                f"⚠️ Ngày không hợp lệ: {', '.join(bad) if bad else '(trống)'}\nNhập lại các ngày của T{m}/{y} (1–{__import__('calendar').monthrange(y,m)[1]}):")
+            return RECURRING_ADD_DAYS_INPUT
+        for d in days:
+            context.user_data['recur_dates'].append(f"{y:04d}-{m:02d}-{d:02d}")
+    # advance to next month, or finish
+    if idx + 1 < len(months):
+        context.user_data['recur_month_idx'] = idx + 1
+        return await _recurring_prompt_days(update.message, context)
+    dates = sorted(context.user_data['recur_dates'])
+    if not dates:
+        await update.message.reply_text("⚠️ Chưa chọn ngày nào. Đã hủy.")
+        return RECURRING_LIST
+    sched = {"freq": "days", "dates": dates}
+    return await _recurring_save_flex(update.message, context, sched)
+
+async def _recurring_save_new(target, context) -> int:
+    # target may be a CallbackQuery (q) or a Message — both expose .from_user
+    uid = getattr(getattr(target, "from_user", None), "id", None) or target.chat.id
+    d = context.user_data
     db_recurring_add(uid, d['recur_ttype'], d['recur_amount'], d['recur_category'],
                      d.get('recur_note', ''), d['recur_day'], d.get('recur_month'))
     freq = _recurring_freq_str(d.get('recur_month'))
@@ -4439,11 +4625,40 @@ async def _recurring_save_new(q, context) -> int:
              f"📝 {d.get('recur_note') or '—'}\n"
              f"📅 {freq}")
     items = db_recurring_list(uid)
-    try:
-        await q.edit_message_text(saved+f"\n\n"+t('recur_title',uid).format(n=len(items)),
-                                  reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
-    except Exception:
-        await q.message.reply_text(saved, parse_mode='Markdown')
+    body = saved + "\n\n" + t('recur_title',uid).format(n=len(items))
+    if hasattr(target, "edit_message_text"):
+        try:
+            await target.edit_message_text(body, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+        except Exception:
+            await target.message.reply_text(saved, parse_mode='Markdown')
+    else:
+        await target.reply_text(body, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+    return RECURRING_LIST
+
+async def _recurring_save_flex(target, context, sched) -> int:
+    uid = getattr(getattr(target, "from_user", None), "id", None) or target.chat.id
+    d = context.user_data
+    db_recurring_add(uid, d['recur_ttype'], d['recur_amount'], d['recur_category'],
+                     d.get('recur_note', ''), 1, None, json.dumps(sched, ensure_ascii=False))
+    icon = "💰" if d['recur_ttype'] == 'income' else "💸"
+    label = _recur_sched_label(1, None, json.dumps(sched, ensure_ascii=False))
+    extra = ""
+    if sched.get('freq') == 'days':
+        total = len(sched['dates']) * d['recur_amount']
+        extra = f"\n💵 Tổng dự kiến: `{fmt_amount(total,uid)}` ({len(sched['dates'])} ngày)"
+    saved = (f"{t('recur_saved',uid)}\n"
+             f"{icon} `{fmt_amount(d['recur_amount'],uid)}` — {d['recur_category']}\n"
+             f"📝 {d.get('recur_note') or '—'}\n"
+             f"📅 {label}{extra}")
+    items = db_recurring_list(uid)
+    body = saved + "\n\n" + t('recur_title',uid).format(n=len(items))
+    if hasattr(target, "edit_message_text"):
+        try:
+            await target.edit_message_text(body, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+        except Exception:
+            await target.message.reply_text(saved, parse_mode='Markdown')
+    else:
+        await target.reply_text(body, reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
     return RECURRING_LIST
 
 # ── Delete flow ───────────────────────────────────────────
@@ -4473,7 +4688,7 @@ async def recurring_edit_field(update: Update, context: ContextTypes.DEFAULT_TYP
         return RECURRING_LIST
     field = q.data.replace("recur_field_", "")
     context.user_data['recur_edit_field'] = field
-    _, _, ttype, amount, category, note, day, month, _ = context.user_data['recur_edit_row']
+    _, _, ttype, amount, category, note, day, month, _, sched = context.user_data['recur_edit_row']
     if field == 'amount':
         await q.edit_message_text(f"Số tiền hiện tại: `{amount:,.0f} đ`\nNhập số tiền mới:", parse_mode='Markdown')
     elif field == 'category':
@@ -4482,13 +4697,22 @@ async def recurring_edit_field(update: Update, context: ContextTypes.DEFAULT_TYP
     elif field == 'note':
         await q.edit_message_text(f"Ghi chú hiện tại: *{note or '—'}*\nNhập ghi chú mới (hoặc `-` để xóa):", parse_mode='Markdown')
     elif field == 'schedule':
+        if _recur_parse_sched(sched):
+            # Flexible schedules (daily / chosen-days) can't be edited inline — resend instead.
+            items = db_recurring_list(q.from_user.id)
+            await q.edit_message_text(
+                "⚠️ Loại lịch này (hằng ngày / chọn ngày) không sửa trực tiếp được.\n"
+                "Hãy xóa khoản và tạo lại nếu cần đổi lịch.\n\n"
+                + t('recur_title', q.from_user.id).format(n=len(items)),
+                reply_markup=_recurring_list_kb(items), parse_mode='Markdown')
+            return RECURRING_LIST
         await q.edit_message_text(f"Lịch hiện tại: ngày *{day}* {_recurring_freq_str(month)}\nNhập ngày mới (1–28):", parse_mode='Markdown')
     return RECURRING_EDIT_VALUE
 
 async def recurring_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     field = context.user_data.get('recur_edit_field')
     rec_id = context.user_data.get('recur_edit_id')
-    _, _, ttype, amount, category, note, day, month, _ = context.user_data['recur_edit_row']
+    _, _, ttype, amount, category, note, day, month, _, sched = context.user_data['recur_edit_row']
     uid = update.effective_user.id
 
     if update.callback_query:
@@ -4560,10 +4784,9 @@ async def check_recurring_job(context: ContextTypes.DEFAULT_TYPE):
     today = datetime.datetime.now()
     rows = db_recurring_all()
     for row in rows:
-        rec_id, user_id, ttype, amount, category, note, day, month, last_triggered = row
-        if today.day != day: continue
-        period_key = today.strftime('%Y-%m') if month is None else today.strftime('%Y')
-        if month is not None and today.month != month: continue
+        rec_id, user_id, ttype, amount, category, note, day, month, last_triggered, sched = row
+        due, period_key = _recur_due(day, month, sched, today)
+        if not due: continue
         if last_triggered == period_key: continue
         created_at = today
         if ttype == 'income':
@@ -4571,12 +4794,12 @@ async def check_recurring_job(context: ContextTypes.DEFAULT_TYPE):
         else:
             db_add_expense(user_id, amount, note or '', category, created_at)
         db_recurring_update_triggered(rec_id, period_key)
-        freq = _recurring_freq_str(month)
+        freq = _recur_sched_label(day, month, sched)
         icon = "💰" if ttype == 'income' else "💸"
         msg = (f"🔁 *Giao dịch định kỳ tự động*\n"
                f"{icon} `{amount:,.0f} đ` — {category}\n"
                f"📝 {note or '—'}\n"
-               f"📅 {freq.capitalize()} ngày {day}")
+               f"📅 {freq} · {today.strftime('%d/%m/%Y')}")
         try:
             await context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
         except Exception as e:
